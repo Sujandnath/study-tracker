@@ -112,10 +112,12 @@
       ],
       sessions: [],
       journal: {},
+      rest: {},
+      checkins: {},
       categories: BUILTIN_CATS.map((b) => ({ ...b, updatedAt: 0 })),
       plans: {},
       templates: [],
-      settings: { dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, updatedAt: t },
+      settings: { dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, updatedAt: t },
       timer: null,
       timerUpdatedAt: 0
     };
@@ -131,7 +133,8 @@
     BUILTIN_CATS.forEach((b) => { if (!d.categories.some((x) => x.id === b.id)) d.categories.push({ ...b, updatedAt: 0 }); });
     d.timerUpdatedAt = d.timerUpdatedAt || 0;
     if (!d.journal || typeof d.journal !== 'object') d.journal = {};
-    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, updatedAt: 0 }, d.settings || {});
+    for (const k of ['rest', 'checkins']) if (!d[k] || typeof d[k] !== 'object' || Array.isArray(d[k])) d[k] = {};
+    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, updatedAt: 0 }, d.settings || {});
     if (!d.timer) d.timer = null;
     return d;
   }
@@ -162,6 +165,11 @@
       if (!out.plans[day] || (p.updatedAt || 0) > (out.plans[day].updatedAt || 0)) out.plans[day] = p;
     }
     out.templates = mergeById(out.templates, inc.templates);
+    for (const k of ['rest', 'checkins']) {
+      for (const [day, v] of Object.entries(inc[k])) {
+        if (!out[k][day] || (v.updatedAt || 0) > (out[k][day].updatedAt || 0)) out[k][day] = v;
+      }
+    }
     out.categories = mergeById(out.categories, inc.categories);
     { // older installs seeded default presets with random ids: hide exact duplicates
       const seen = new Set();
@@ -179,6 +187,7 @@
     date: todayStr(),
     tt: { date: null, view: 'list', scope: 'onward', scrollNow: false },
     jr: { q: '', month: 'all' },
+    rv: { anchor: todayStr() },
     form: { type: 'study', topic: '', priority: 'medium', mode: 'stopwatch', minutes: 25 },
     prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr() }
   };
@@ -229,7 +238,7 @@
     const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
     try { return JSON.parse(text); } catch { return null; }
   }
-  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, presets: d.presets, sessions: d.sessions, journal: d.journal, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
+  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, presets: d.presets, sessions: d.sessions, journal: d.journal, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
 
   async function runSync() {
     if (!sync.token) return;
@@ -297,12 +306,14 @@
   window.addEventListener('beforeunload', () => { try { store.saveSync(data); } catch { /* ignore */ } });
 
   // ---------- toast / modal ----------
-  let toastT;
-  function toast(msg) {
+  let toastT, toastUndo = null;
+  function toast(msg, undo) {
     const t = $('#toast');
-    t.textContent = msg; t.hidden = false;
+    toastUndo = undo || null;
+    t.innerHTML = esc(msg) + (undo ? ' <button class="toast-undo" data-action="toast-undo">Undo</button>' : '');
+    t.hidden = false;
     clearTimeout(toastT);
-    toastT = setTimeout(() => { t.hidden = true; }, 2600);
+    toastT = setTimeout(() => { t.hidden = true; toastUndo = null; }, undo ? 8000 : 2600);
   }
   function openModal(title, body, onSave, saveLabel = 'Save') {
     $('#modal-root').innerHTML = `
@@ -324,6 +335,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeModal();
     if (e.key === 'Enter' && $('#modal-save') && e.target.tagName === 'INPUT') $('#modal-save').click();
+    if (e.key === 'Enter' && e.target.id === 'qa') { e.preventDefault(); actions['qa-add'](); }
   });
 
   // ---------- timer ----------
@@ -368,6 +380,7 @@
       ensureTopic(t.topic, t.type, t.priority);
       ui.date = sessionDate(t.type, t.startWall, secs);
       toast(`Saved ${short(secs)} of ${name}`);
+      if (secs >= 60 && isWork({ type: t.type }) && data.settings.askFocus !== false) setTimeout(() => focusPrompt(sid), 0);
     } else if (save) {
       toast('Too short to save (under 1 second)');
     }
@@ -380,24 +393,45 @@
     if (!ex) data.topics.push(touch({ id: uid(), name, type, priority }));
   }
 
-  function beep() {
+  // A soft bell: a few sine partials with a quick attack and a long, quiet decay.
+  let audioCtx = null;
+  function getAudio() {
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      [0, 0.25, 0.5].forEach((delay) => {
-        const o = ctx.createOscillator(), g = ctx.createGain();
-        o.type = 'sine'; o.frequency.value = 880;
-        g.gain.setValueAtTime(0.0001, ctx.currentTime + delay);
-        g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + delay + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + delay + 0.2);
-        o.connect(g); g.connect(ctx.destination);
-        o.start(ctx.currentTime + delay); o.stop(ctx.currentTime + delay + 0.22);
-      });
+      if (!audioCtx) { const C = window.AudioContext || window.webkitAudioContext; if (C) audioCtx = new C(); }
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
     } catch { /* audio not available */ }
+    return audioCtx;
+  }
+  ['pointerdown', 'keydown', 'touchstart'].forEach((ev) => document.addEventListener(ev, () => { getAudio(); }, { passive: true }));
+  function ting() {
+    const ctx = getAudio();
+    try { if (navigator.vibrate) navigator.vibrate([120, 70, 120]); } catch { /* ignore */ }
+    if (!ctx) return;
+    const bell = (when, vol) => {
+      [[1046.5, 1], [2093, 0.32], [3136, 0.1]].forEach(([f, g]) => {
+        const o = ctx.createOscillator(), a = ctx.createGain();
+        o.type = 'sine'; o.frequency.value = f;
+        a.gain.setValueAtTime(0.0001, when);
+        a.gain.exponentialRampToValueAtTime(vol * g, when + 0.012);
+        a.gain.exponentialRampToValueAtTime(0.0001, when + 1.6);
+        o.connect(a); a.connect(ctx.destination);
+        o.start(when); o.stop(when + 1.7);
+      });
+    };
+    const t0 = ctx.currentTime + 0.03;
+    bell(t0, 0.28); bell(t0 + 0.8, 0.15);
   }
 
+  let lastLive = 0;
   function tick() {
     const t = data && data.timer;
     const mini = $('#mini');
+    const nowMs = Date.now();
+    if (ui.page === 'timetable' && nowMs - lastLive > 30000) {
+      lastLive = nowMs;
+      const busy = drag || $('#modal-root').innerHTML || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '');
+      if (!busy) { render(); return; }
+    }
     if (!t) { mini.hidden = true; return; }
     const el = elapsedMs(t) / 1000;
     const shown = t.mode === 'countdown' ? Math.max(0, t.targetSec - el) : el;
@@ -405,7 +439,7 @@
 
     if (over && !t.alerted && t.startedAt) {
       t.alerted = true; persist(true);
-      beep();
+      if (data.settings.sound !== false) ting();
       const label = t.topic || defaultLabel(t.type);
       toast(`Time is up: ${label}`);
       try { if ('Notification' in window) { Notification.requestPermission().then((p) => { if (p === 'granted') new Notification('Time is up', { body: label }); }); } } catch { /* ignore */ }
@@ -440,7 +474,11 @@
     const days = new Set(live(data.sessions).filter((s) => kindOf(s.type) === 'study').map((s) => s.date));
     let d = todayStr(), n = 0;
     if (!days.has(d)) d = addDays(d, -1);
-    while (days.has(d)) { n++; d = addDays(d, -1); }
+    for (let i = 0; i < 4000; i++) {
+      if (days.has(d)) n++;
+      else if (!isRest(d)) break; // a rest day neither adds to nor breaks the streak
+      d = addDays(d, -1);
+    }
     return n;
   }
   function topicTotal(name) {
@@ -577,6 +615,229 @@
   }
 
   // =====================================================================
+  //  v4: undo, focus rating, rest days, check-in, quick add, install help
+  // =====================================================================
+  const isRest = (d) => !!(data.rest && data.rest[d] && data.rest[d].on);
+  const weekStart = (d) => addDays(d, -((parseYmd(d).getDay() + 6) % 7));
+  const MOODS = [['😞', 'Rough'], ['🙁', 'Low'], ['😐', 'Okay'], ['🙂', 'Good'], ['😄', 'Great']];
+  const FOCUS_WORDS = ['Scattered', 'Distracted', 'Okay', 'Focused', 'Deep focus'];
+
+  function softDelete(rec, msg, after) {
+    rec.deleted = true; touch(rec);
+    if (after) after();
+    persist(true); render();
+    toast(msg, () => { rec.deleted = false; touch(rec); persist(true); render(); });
+  }
+
+  function focusPrompt(id) {
+    const s = data.sessions.find((x) => x.id === id);
+    if (!s || s.deleted || $('#modal-root').innerHTML) return;
+    choiceModal('How focused were you?', `
+      <p class="note" style="margin-bottom:12px"><b>${esc(s.topic)}</b> · ${short(s.seconds)}</p>
+      <div class="rate big">${[1, 2, 3, 4, 5].map((n) => `<button data-action="set-focus" data-id="${id}" data-v="${n}"><b>${n}</b><span>${FOCUS_WORDS[n - 1]}</span></button>`).join('')}</div>`,
+      [{ label: 'Skip' }]);
+  }
+
+  function restLine(d) {
+    const on = isRest(d);
+    return `<div class="restline">${on ? '<span class="pill rest">Rest day</span><span class="note">Your streak is safe.</span>' : '<span class="note">Need a day off?</span>'}
+      <button class="linkbtn" data-action="rest-toggle" data-date="${d}">${on ? 'Remove' : 'Mark as rest day'}</button></div>`;
+  }
+
+  function checkinCard(d) {
+    const ci = data.checkins[d] || {}, isToday = d === todayStr();
+    const nudge = isToday && new Date().getHours() >= 19 && !ci.mood && !ci.focus;
+    const row = (k, items) => items.map(([lab, sub], i) => `<button class="${ci[k] === i + 1 ? 'on' : ''}" data-action="ci-set" data-k="${k}" data-v="${i + 1}" title="${esc(sub)}">${lab}</button>`).join('');
+    return `<div class="card ${nudge ? 'nudge' : ''}">
+      <h2>Evening check-in <small>${nudge ? 'How did today go?' : isToday ? 'rate your day' : fmtShort(d)}</small></h2>
+      <div class="field"><label>Mood</label><div class="rate">${row('mood', MOODS)}</div></div>
+      <div class="field" style="margin-bottom:0"><label>Focus today</label><div class="rate">${row('focus', FOCUS_WORDS.map((w, i) => [String(i + 1), w]))}</div></div>
+      ${ci.mood || ci.focus ? `<p class="note" style="margin-top:10px">${ci.mood ? MOODS[ci.mood - 1][1] : ''}${ci.mood && ci.focus ? ' · ' : ''}${ci.focus ? FOCUS_WORDS[ci.focus - 1] : ''}. Tap again to clear.</p>` : ''}
+    </div>`;
+  }
+
+  // ---- quick add: "Chemistry 11:00-12:30", "Physics 2h", "break: tea 15m", "Maths 1h30m at 3pm"
+  function parseQuickEntry(input, date) {
+    let s = ' ' + String(input || '').trim() + ' ';
+    let priority = null, type = null;
+    const pm = s.match(/\s!(high|medium|low|h|m|l)\b/i);
+    if (pm) { const k = pm[1][0].toLowerCase(); priority = k === 'h' ? 'high' : k === 'l' ? 'low' : 'medium'; s = s.replace(pm[0], ' '); }
+    const names = cats().map((x) => x.name).sort((x, y) => y.length - x.length).map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const tm = names.length ? s.trim().match(new RegExp('^(' + names.join('|') + ')\\s*[:\\-]\\s*', 'i')) : null;
+    if (tm) { type = cats().find((x) => x.name.toLowerCase() === tm[1].toLowerCase()).id; s = ' ' + s.trim().slice(tm[0].length) + ' '; }
+    const to24 = (hh, mm, mer) => { let h = +hh; const m = +(mm || 0); if (mer) { mer = mer.toLowerCase(); h = h % 12 + (mer === 'pm' ? 12 : 0); } return { h, m, mer: !!mer }; };
+    let startMin = null, endMin = null, secs = 0, error = '';
+    const rg = s.match(/(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\s*(?:-|–|—|to|till|until)\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?(?![\d:])/i);
+    if (rg && (rg[2] || rg[5] || rg[3] || rg[6])) {
+      let x = to24(rg[1], rg[2], rg[3]); const y = to24(rg[4], rg[5], rg[6]);
+      if (!x.mer && y.mer) {
+        const mer = rg[6].toLowerCase(); x = to24(rg[1], rg[2], mer);
+        if (x.h * 60 + x.m >= y.h * 60 + y.m) x = to24(rg[1], rg[2], mer === 'pm' ? 'am' : 'pm');
+      }
+      if (x.h > 23 || y.h > 23 || x.m > 59 || y.m > 59) error = 'That time is not valid';
+      startMin = x.h * 60 + x.m; endMin = y.h * 60 + y.m;
+      if (!x.mer && !y.mer && endMin <= startMin && y.h < 12 && endMin + 720 - startMin <= 360) endMin += 720; // "10:00-1:00" means 1 pm
+      s = s.replace(rg[0], ' ');
+    }
+    if (startMin === null) {
+      let hrs = 0, mins = 0, found = false;
+      const dh = s.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)(?![a-z])/i);
+      if (dh) { hrs = parseFloat(dh[1]); s = s.replace(dh[0], ' '); found = true; }
+      const dm = s.match(/(\d+)\s*(?:m|min|mins|minute|minutes)(?![a-z])/i);
+      if (dm) { mins = parseInt(dm[1], 10); s = s.replace(dm[0], ' '); found = true; }
+      if (found) secs = Math.round(hrs * 3600 + mins * 60);
+      const at = s.match(/\bat\s+(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\b/i);
+      if (at) { const x = to24(at[1], at[2], at[3]); if (x.h > 23 || x.m > 59) error = 'That time is not valid'; startMin = x.h * 60 + x.m; s = s.replace(at[0], ' '); }
+    }
+    const topic = s.replace(/\s+/g, ' ').replace(/^[\s,;:\-–]+|[\s,;:\-–]+$/g, '');
+    type = type || 'study';
+    const k = kindOf(type);
+    if (!priority) {
+      const ex = live(data.topics).find((x) => x.name.toLowerCase() === topic.toLowerCase());
+      priority = (k === 'break' || k === 'sleep') ? 'low' : ex ? ex.priority : 'medium';
+    }
+    const out = { topic, type, priority, complete: false, error };
+    if (error) return out;
+    const base = parseYmd(date);
+    const mk = (min) => { const x = new Date(base); x.setHours(0, 0, 0, 0); x.setMinutes(min); return x.getTime(); };
+    if (startMin !== null && endMin !== null) {
+      out.start = mk(startMin); out.seconds = (endMin - startMin) * 60;
+      if (out.seconds <= 0) out.error = 'The end time must be after the start time'; else out.complete = true;
+    } else if (startMin !== null && secs) { out.start = mk(startMin); out.seconds = secs; out.complete = true; }
+    else if (secs) {
+      out.seconds = secs;
+      if (date === todayStr()) { out.start = Math.round((Date.now() - secs * 1000) / 60000) * 60000; out.complete = true; } // it just ended
+    } else if (startMin !== null) out.start = mk(startMin);
+    return out;
+  }
+  function quickAddBar() {
+    return `<div class="qa">
+      <input type="text" id="qa" autocomplete="off" placeholder="Quick add for ${ui.date === todayStr() ? 'today' : fmtShort(ui.date)}: Chemistry 11:00-12:30 · Physics 2h · break: tea 15m">
+      <button class="btn primary" data-action="qa-add">Add</button>
+    </div>`;
+  }
+
+  // ---- install help
+  const isStandalone = () => !!((window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true);
+  const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let deferredInstall = null;
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; });
+  window.addEventListener('appinstalled', () => { deferredInstall = null; if (data) render(); });
+  const installDismissed = () => { try { return localStorage.getItem('studytracker-install-dismissed') === '1'; } catch { return false; } };
+  function installBanner() {
+    if (isStandalone() || installDismissed()) return '';
+    if (!(window.matchMedia && matchMedia('(pointer: coarse)').matches)) return '';
+    return `<div class="install">
+      <div class="grow"><b>Install Study Tracker</b>
+        <div class="note">Opens like an app with no browser bars, and keeps your data from being cleared.</div></div>
+      <button class="btn primary sm" data-action="install-now">Install</button>
+      <button class="btn sm" data-action="install-dismiss">Not now</button>
+    </div>`;
+  }
+  function installModal() {
+    const ios = '<li>Open this page in <b>Safari</b> (not inside another app).</li><li>Tap the <b>Share</b> button (the square with an arrow).</li><li>Scroll down and tap <b>Add to Home Screen</b>, then <b>Add</b>.</li>';
+    const and = '<li>Open this page in <b>Chrome</b>.</li><li>Tap the <b>⋮</b> menu at the top right.</li><li>Tap <b>Install app</b> (or <b>Add to Home screen</b>), then confirm.</li>';
+    const pc = '<li>In Chrome or Edge, click the <b>install icon</b> at the right end of the address bar, or open the menu and choose <b>Install Study Tracker</b>.</li>';
+    const secs = [['iPhone / iPad', ios], ['Android', and], ['Computer', pc]];
+    const first = isIOS() ? 0 : /android/i.test(navigator.userAgent) ? 1 : 2;
+    const ordered = [secs[first], ...secs.filter((_, i) => i !== first)];
+    choiceModal('Install as an app', `
+      <p class="note" style="margin-bottom:12px">It then opens full screen from your home screen, like any other app. Your data stays in sync.</p>
+      ${ordered.map(([t, l], i) => `<div class="inst-sec ${i === 0 ? 'first' : ''}"><b>${t}</b><ol>${l}</ol></div>`).join('')}`,
+      [{ label: 'Got it', cls: 'primary' }]);
+  }
+  function installCard() {
+    if (isStandalone()) return '<div class="card"><h2>Installed</h2><p class="note">You are using Study Tracker as an installed app.</p></div>';
+    return `<div class="card"><h2>Install as an app</h2>
+      <p class="note" style="margin-bottom:12px">Add Study Tracker to your phone's home screen or your computer, so it opens full screen like a normal app.</p>
+      <button class="btn primary" data-action="install-now">Show me how</button></div>`;
+  }
+
+  // ---- weekly review
+  function weekStats(from, to) {
+    const goal = data.settings.dailyGoalMin * 60, today = todayStr();
+    const all = live(data.sessions).filter((s) => s.date >= from && s.date <= to);
+    const perDay = {}, sum = { study: 0, break: 0, neutral: 0, sleep: 0 };
+    let goalDays = 0, activeDays = 0, restDays = 0, daysElapsed = 0, best = { d: null, sec: 0 }, sleepNights = 0;
+    const moods = [], dayFocus = [];
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(from, i), ds = dayStats(d);
+      perDay[d] = { study: ds.tot.study, break: ds.tot.break + ds.gapBreak, neutral: ds.tot.neutral, sleep: ds.tot.sleep };
+      Object.keys(sum).forEach((k) => { sum[k] += perDay[d][k]; });
+      if (d <= today) daysElapsed++;
+      if (goal && d <= today && ds.tot.study >= goal) goalDays++;
+      if (ds.tot.study > 0) activeDays++;
+      if (ds.tot.sleep > 0) sleepNights++;
+      if (isRest(d)) restDays++;
+      if (ds.tot.study > best.sec) best = { d, sec: ds.tot.study };
+      const ci = data.checkins[d]; if (ci && ci.mood) moods.push(ci.mood); if (ci && ci.focus) dayFocus.push(ci.focus);
+    }
+    const avg = (l) => (l.length ? l.reduce((n, x) => n + x, 0) / l.length : 0);
+    const rated = all.filter((s) => s.focus && isWork(s));
+    const byTopic = new Map();
+    rated.forEach((s) => { const k = s.topic.toLowerCase(), e = byTopic.get(k) || { name: s.topic, sum: 0, n: 0, sec: 0 }; e.sum += s.focus; e.n++; e.sec += s.seconds; byTopic.set(k, e); });
+    const focusTop = [...byTopic.values()].filter((e) => e.sec >= 1800).map((e) => ({ ...e, avg: e.sum / e.n })).sort((x, y) => y.avg - x.avg || y.sec - x.sec)[0] || null;
+    const longest = all.filter(isWork).sort((x, y) => y.seconds - x.seconds)[0] || null;
+    return { all, perDay, sum, goalDays, activeDays, restDays, daysElapsed, best, sleepNights, avgMood: avg(moods), nMood: moods.length, avgDayFocus: avg(dayFocus), avgSession: avg(rated.map((s) => s.focus)), nRated: rated.length, focusTop, longest };
+  }
+  function pageReview() {
+    const from = weekStart(ui.rv.anchor), to = addDays(from, 6), thisWeek = from === weekStart(todayStr());
+    const w = weekStats(from, to), p = weekStats(addDays(from, -7), addDays(from, -1));
+    const r = { from, to }, goal = data.settings.dailyGoalMin * 60;
+    const diff = w.sum.study - p.sum.study;
+    const parts = [];
+    parts.push(w.sum.study
+      ? `You studied <b>${short(w.sum.study)}</b> ${thisWeek ? 'so far this week' : 'this week'}${p.sum.study ? (diff >= 0 ? `, <b>${short(diff)} more</b> than the week before` : `, <b>${short(-diff)} less</b> than the week before`) : ''}.`
+      : 'No study was logged this week.');
+    if (goal && w.daysElapsed) parts.push(`You reached your daily goal on <b>${w.goalDays}</b> of ${w.daysElapsed} ${w.daysElapsed === 1 ? 'day' : 'days'}.`);
+    if (w.best.sec) parts.push(`Your best day was <b>${fmtDow(w.best.d)}</b> with ${short(w.best.sec)}.`);
+    if (w.restDays) parts.push(`${w.restDays} rest ${w.restDays === 1 ? 'day' : 'days'} taken.`);
+    const mood = (v) => MOODS[Math.min(4, Math.max(0, Math.round(v) - 1))][0];
+    const dayRows = Array.from({ length: 7 }, (_, i) => {
+      const d = addDays(from, i), ci = data.checkins[d] || {}, jt = ((data.journal[d] && data.journal[d].text) || '').trim();
+      return `<div class="rvrow ${d > todayStr() ? 'future' : ''}" data-action="jr-open" data-date="${d}">
+        <div class="rd"><b>${parseYmd(d).toLocaleDateString('en-IN', { weekday: 'short' })}</b><span class="note">${parseYmd(d).getDate()}</span></div>
+        <div class="rs">${w.perDay[d].study ? short(w.perDay[d].study) : '–'}</div>
+        <div class="rm">${ci.mood ? MOODS[ci.mood - 1][0] : ''}${ci.focus ? `<span class="ftag">F${ci.focus}</span>` : ''}${isRest(d) ? '<span class="pill rest">Rest</span>' : ''}</div>
+        <div class="rj note">${jt ? esc(jt.length > 150 ? jt.slice(0, 150) + '…' : jt) : '<i>no journal entry</i>'}</div>
+      </div>`;
+    }).join('');
+    const hi = [];
+    if (w.longest) hi.push(`<div class="hl"><span class="k">Longest session</span><b>${esc(w.longest.topic)}</b> · ${short(w.longest.seconds)}</div>`);
+    if (w.focusTop) hi.push(`<div class="hl"><span class="k">Most focused topic</span><b>${esc(w.focusTop.name)}</b> · ${w.focusTop.avg.toFixed(1)} / 5</div>`);
+    if (w.best.sec) hi.push(`<div class="hl"><span class="k">Best day</span><b>${fmtDow(w.best.d)}</b> · ${short(w.best.sec)}</div>`);
+    return `
+      <div class="page-head"><div><h1>Weekly review</h1><p class="sub">${fmtShort(from)} – ${fmtShort(to)}${thisWeek ? ' · this week' : ''}</p></div></div>
+      <div class="controls">
+        <button class="btn icon" data-action="rv-prev" aria-label="Previous week">${chev('left')}</button>
+        <div class="range-label">${fmtShort(from)} – ${fmtShort(to)}</div>
+        <button class="btn icon" data-action="rv-next" aria-label="Next week">${chev('right')}</button>
+        <input type="date" data-change="rv-anchor" value="${ui.rv.anchor}">
+        <button class="btn" data-action="rv-now">This week</button>
+      </div>
+      <div class="stack">
+        <div class="card rv-sum"><p>${parts.join(' ')}</p></div>
+        <div class="tiles six">
+          <div class="tile"><div class="k">Total study</div><div class="v">${short(w.sum.study)}</div><div class="s">${p.sum.study ? (diff >= 0 ? '+' : '−') + short(Math.abs(diff)) + ' vs last week' : 'no data last week'}</div></div>
+          <div class="tile"><div class="k">Goal days</div><div class="v">${w.goalDays}<span style="font-size:14px;color:var(--muted)"> / ${w.daysElapsed}</span></div><div class="s">goal ${short(goal)} a day</div></div>
+          <div class="tile"><div class="k">Active days</div><div class="v">${w.activeDays}<span style="font-size:14px;color:var(--muted)"> / 7</span></div><div class="s">${w.restDays ? w.restDays + ' rest' : 'days with study'}</div></div>
+          ${adhTile(r)}
+          <div class="tile"><div class="k">Avg sleep</div><div class="v">${w.sleepNights ? short(w.sum.sleep / w.sleepNights) : '–'}</div><div class="s">${w.sleepNights ? 'over ' + w.sleepNights + (w.sleepNights === 1 ? ' night' : ' nights') : 'no sleep logged'}</div></div>
+          <div class="tile"><div class="k">Session focus</div><div class="v">${w.nRated ? w.avgSession.toFixed(1) : '–'}</div><div class="s">${w.nRated ? 'out of 5 · ' + w.nRated + ' rated' : 'rate after a timer'}</div></div>
+          <div class="tile"><div class="k">Mood</div><div class="v">${w.nMood ? mood(w.avgMood) : '–'}</div><div class="s">${w.nMood ? w.avgMood.toFixed(1) + ' / 5 · ' + w.nMood + (w.nMood === 1 ? ' check-in' : ' check-ins') : 'no check-ins'}</div></div>
+          <div class="tile"><div class="k">Streak</div><div class="v">${streak()}<span style="font-size:14px;color:var(--muted)"> ${streak() === 1 ? 'day' : 'days'}</span></div><div class="s">current</div></div>
+        </div>
+        <div class="card"><h2>Daily time <small>hours</small></h2><div class="chart-wrap">${barChart(r, w.perDay, 7)}</div>
+          <div class="legend">${['study', 'break', 'neutral'].map((k) => `<span><span class="tdot" style="background:${KIND_COLOR[k]}"></span>${KLABEL[k]}</span>`).join('')}</div></div>
+        <div class="two">
+          <div class="card"><h2>Top topics <small>study + other</small></h2>${topicBreakdown(w.all)}</div>
+          <div class="card"><h2>Highlights</h2>${hi.length ? hi.join('') : '<div class="note">Highlights appear once you have logged some study.</div>'}</div>
+        </div>
+        <div class="card"><h2>Day by day <small>tap a day to open it</small></h2><div class="rv-days">${dayRows}</div></div>
+      </div>`;
+  }
+
+  // =====================================================================
   //  TODAY PAGE
   // =====================================================================
   function pageToday() {
@@ -600,6 +861,7 @@
           ${isToday ? '' : '<button class="btn" data-action="date-today">Today</button>'}
         </div>
       </div>
+      ${installBanner()}
       <div class="grid">
         <div class="stack">
           <div class="card">${timerCard()}</div>
@@ -618,16 +880,19 @@
               <div class="bar"><i style="width:${pct}%"></i></div>
             </div>
             ${sleepLine(d, ds)}
+            ${restLine(d)}
           </div>
           <div class="card">
             <h2>Journal <button class="linkbtn" data-action="nav" data-page="journal">All entries →</button></h2>
             <textarea data-bind="journal" placeholder="How did the day go? What clicked, what to revisit…">${esc(journal)}</textarea>
             <p class="note" style="margin-top:8px">Saved automatically. Every day's entry is kept on the <b>Journal</b> page.</p>
           </div>
+          ${checkinCard(d)}
         </div>
       </div>
       <div class="card" style="margin-top:20px">
         <h2>Activity log <button class="btn sm primary" data-action="entry-add">+ Add entry</button></h2>
+        ${quickAddBar()}
         ${logTable(list, ds)}
       </div>`;
   }
@@ -730,7 +995,7 @@
       return `
             <tr>
               <td class="num">${++n}</td>
-              <td><div class="topic-cell">${typeDot(s.type)}${esc(s.topic)}</div></td>
+              <td><div class="topic-cell">${typeDot(s.type)}${esc(s.topic)}${s.focus ? `<span class="ftag" title="Focus ${s.focus} of 5">★${s.focus}</span>` : ''}</div></td>
               <td>${fmtTime(s.start)}</td>
               <td>${prioPill(s.priority)}</td>
               <td class="dur">${hms(s.seconds)}</td>
@@ -764,7 +1029,7 @@
       <div class="field"><label>Activity</label>
         <select id="m-type">${optHtml(s.type)}</select></div>
       <div class="field"><label>Topic</label>
-        <input type="text" id="m-topic" list="m-topics" value="${esc(existing ? s.topic : '')}" placeholder="Topic or label" autocomplete="off">
+        <input type="text" id="m-topic" list="m-topics" value="${esc(s.topic || '')}" placeholder="Topic or label" autocomplete="off">
         <datalist id="m-topics">${live(data.topics).map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>
       <div class="field"><label>Importance</label>
         <select id="m-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${s.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
@@ -782,6 +1047,7 @@
       </div>
       <div class="note" id="m-end" style="margin-bottom:14px"></div>
       <div class="field"><label>Comment</label><input type="text" id="m-comment" value="${esc(s.comment)}" placeholder="Optional"></div>
+      <div class="field"><label>Focus (optional)</label><select id="m-focus"><option value="">Not rated</option>${[1, 2, 3, 4, 5].map((n) => `<option value="${n}" ${s.focus === n ? 'selected' : ''}>${n} · ${FOCUS_WORDS[n - 1]}</option>`).join('')}</select></div>
       ${existing && existing.blockId ? linkNote(existing) : ''}
       ${existing ? `<button class="btn danger sm" data-action="entry-del-modal" data-id="${existing.id}">Delete this entry</button>` : ''}`;
     openModal(existing ? 'Edit entry' : 'Add entry', body, () => {
@@ -795,6 +1061,7 @@
       const prio = $('#m-prio').value;
       const rec = existing || { id: uid() };
       Object.assign(rec, { date: sessionDate(type, day.getTime(), secs), start: day.getTime(), seconds: secs, topic, type, priority: prio, comment: $('#m-comment').value.trim() });
+      { const fv = parseInt($('#m-focus').value, 10); if (fv >= 1 && fv <= 5) rec.focus = fv; else delete rec.focus; }
       touch(rec);
       if (!existing) { data.sessions.push(rec); offerBlockMatch(rec); }
       if ($('#m-topic').value.trim()) ensureTopic($('#m-topic').value, type, prio);
@@ -838,6 +1105,7 @@
     Object.keys(perDay).forEach((d) => { const g = dayStats(d).gapBreak; perDay[d].break += g; gapSum += g; });
     tot.break += gapSum; // time between entries counts as break
     const sleepNights = Object.values(perDay).filter((x) => x.sleep > 0).length;
+    const rated = all.filter((s) => s.focus && isWork(s)), avgFocus = rated.length ? rated.reduce((n, s) => n + s.focus, 0) / rated.length : 0;
     const activeDays = Object.values(perDay).filter((x) => x.study > 0).length;
     let best = null;
     Object.entries(perDay).forEach(([d, x]) => { if (!best || x.study > best.sec) best = { d, sec: x.study }; });
@@ -869,6 +1137,7 @@
           <div class="tile"><div class="k">Breaks</div><div class="v">${short(tot.break)}</div><div class="s">${tot.study ? Math.round(tot.break / tot.study * 100) + '% of study' : '–'}</div></div>
           ${adhTile(r)}
           <div class="tile"><div class="k">Avg sleep</div><div class="v">${sleepNights ? short(tot.sleep / sleepNights) : '–'}</div><div class="s">${sleepNights ? 'over ' + sleepNights + (sleepNights === 1 ? ' night' : ' nights') : 'no sleep logged'}</div></div>
+          ${rated.length ? `<div class="tile"><div class="k">Avg focus</div><div class="v">${avgFocus.toFixed(1)}<span style="font-size:14px;color:var(--muted)"> / 5</span></div><div class="s">${rated.length} rated</div></div>` : ''}
           <div class="tile"><div class="k">Streak</div><div class="v">${streak()}<span style="font-size:14px;color:var(--muted)"> ${streak() === 1 ? 'day' : 'days'}</span></div><div class="s">current</div></div>
         </div>
 
@@ -949,11 +1218,11 @@
     for (let i = 0; i < n; i++) {
       const d = addDays(r.from, i), sec = (perDay[d] || {}).study || 0, ratio = sec / goal;
       const lvl = sec <= 0 ? 0 : ratio < 0.25 ? 1 : ratio < 0.6 ? 2 : ratio < 1 ? 3 : 4;
-      h += `<div class="day l${lvl} ${d > today ? 'future' : ''} ${d === today ? 'is-today' : ''}" data-action="goto-day" data-date="${d}" title="${fmtLong(d)}: ${short(sec)} study">
-        <span class="n">${parseYmd(d).getDate()}</span><span class="t">${sec ? short(sec) : ''}</span></div>`;
+      h += `<div class="day l${lvl} ${d > today ? 'future' : ''} ${d === today ? 'is-today' : ''} ${isRest(d) ? 'rest' : ''}" data-action="goto-day" data-date="${d}" title="${fmtLong(d)}: ${short(sec)} study${isRest(d) ? ' (rest day)' : ''}">
+        <span class="n">${parseYmd(d).getDate()}</span><span class="t">${sec ? short(sec) : isRest(d) ? 'Rest' : ''}</span></div>`;
     }
     const sw = ['#f1f5f9', '#dbeafe', '#93c5fd', '#3b82f6', '#1d4ed8'].map((c) => `<i style="background:${c}"></i>`).join('');
-    return `<div class="cal">${h}</div><div class="cal-legend">Less ${sw} More <span style="margin-left:8px">(goal = ${short(goal)})</span></div>`;
+    return `<div class="cal">${h}</div><div class="cal-legend">Less ${sw} More <span style="margin-left:8px">(goal = ${short(goal)})</span> <span style="margin-left:8px"><i class="rest-sw"></i> rest day</span></div>`;
   }
 
   function topicBreakdown(list) {
@@ -1026,12 +1295,18 @@
               </div>`).join('') : '<div class="empty"><b>No presets</b>A preset remembers a topic, importance and duration.</div>'}
           </div>
           ${syncCard()}
+          ${installCard()}
           <div class="card">
             <h2>Settings &amp; backup</h2>
             <div class="field"><label>Daily study goal (minutes)</label>
               <input type="number" min="0" max="1440" step="15" data-change="goal" value="${data.settings.dailyGoalMin}"></div>
             <div class="field"><label>Longest gap counted as break (minutes)</label>
               <input type="number" min="10" max="720" step="10" data-change="gap-cap" value="${gapCapMin()}"></div>
+            <div class="field"><label>Rest days allowed per week</label>
+              <input type="number" min="0" max="7" step="1" data-change="rest-limit" value="${data.settings.restPerWeek ?? 1}"></div>
+            <div class="field"><label class="chk"><input type="checkbox" data-change="ask-focus" ${data.settings.askFocus !== false ? 'checked' : ''}> Ask for a focus rating when I stop a timer</label></div>
+            <div class="field"><label class="chk"><input type="checkbox" data-change="sound" ${data.settings.sound !== false ? 'checked' : ''}> Play a soft bell when a countdown ends</label>
+              <div><button class="btn sm" data-action="sound-test">Play sound</button></div></div>
             <div class="row">
               <button class="btn" data-action="export">Export backup</button>
               <button class="btn" data-action="import">Import &amp; merge</button>
@@ -1135,7 +1410,10 @@
   }
 
   function blockActual(date, id) {
-    return live(data.sessions).filter((s) => s.planDate === date && s.blockId === id).reduce((n, s) => n + s.seconds, 0);
+    let n = live(data.sessions).filter((s) => s.planDate === date && s.blockId === id).reduce((x, s) => x + s.seconds, 0);
+    const t = data.timer;
+    if (t && t.blockId === id && t.planDate === date) n += Math.round(elapsedMs(t) / 1000); // the running timer fills its block live
+    return n;
   }
   function blockStatus(date, b, plan) {
     const dur = blockDur(b) * 60, act = blockActual(date, b.id), { startMs, endMs } = blockTimes(date, b), now = Date.now();
@@ -1559,7 +1837,7 @@
     $$('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === ui.page));
     const main = $('#main');
     const keep = main.scrollTop;
-    main.innerHTML = ({ today: pageToday, timetable: pageTimetable, progress: pageProgress, journal: pageJournal, library: pageLibrary }[ui.page] || pageToday)();
+    main.innerHTML = ({ today: pageToday, timetable: pageTimetable, progress: pageProgress, journal: pageJournal, review: pageReview, library: pageLibrary }[ui.page] || pageToday)();
     main.scrollTop = keep;
     if (ui.page === 'timetable' && ui.tt.scrollNow) {
       ui.tt.scrollNow = false;
@@ -1607,11 +1885,11 @@
     'entry-edit': (el) => { const s = live(data.sessions).find((x) => x.id === el.dataset.id); if (s) entryModal(s); },
     'entry-del-modal': (el) => {
       const s = live(data.sessions).find((x) => x.id === el.dataset.id);
-      if (s && confirm(`Delete "${s.topic}" (${short(s.seconds)})?`)) { s.deleted = true; touch(s); closeModal(); persist(true); render(); }
+      if (s) { closeModal(); softDelete(s, `Deleted "${s.topic}"`); }
     },
     'entry-del': (el) => {
       const s = live(data.sessions).find((x) => x.id === el.dataset.id);
-      if (s && confirm(`Delete "${s.topic}" (${short(s.seconds)})?`)) { s.deleted = true; touch(s); persist(true); render(); }
+      if (s) softDelete(s, `Deleted "${s.topic}"`);
     },
 
     'prog-mode': (el) => { ui.prog.mode = el.dataset.v; render(); },
@@ -1623,13 +1901,13 @@
     'topic-edit': (el) => { const t = live(data.topics).find((x) => x.id === el.dataset.id); if (t) topicModal(t); },
     'topic-del': (el) => {
       const t = live(data.topics).find((x) => x.id === el.dataset.id);
-      if (t && confirm(`Delete topic "${t.name}"? Logged time stays in your history.`)) { t.deleted = true; touch(t); persist(true); render(); }
+      if (t) softDelete(t, `Deleted topic "${t.name}"`);
     },
     'preset-add': () => presetModal(null),
     'preset-edit': (el) => { const p = live(data.presets).find((x) => x.id === el.dataset.id); if (p) presetModal(p); },
     'preset-del': (el) => {
       const p = live(data.presets).find((x) => x.id === el.dataset.id);
-      if (p && confirm(`Delete preset "${p.name}"?`)) { p.deleted = true; touch(p); persist(true); render(); }
+      if (p) softDelete(p, `Deleted preset "${p.name}"`);
     },
     'preset-start': (el) => {
       const p = live(data.presets).find((x) => x.id === el.dataset.id);
@@ -1650,7 +1928,7 @@
     'cat-edit': (el) => { const x = catRaw(el.dataset.id); if (x) catModal(x); },
     'cat-del': (el) => {
       const x = catRaw(el.dataset.id);
-      if (x && !LOCKED.includes(x.id) && confirm(`Delete category "${x.name}"? Entries already logged keep their time.`)) { x.deleted = true; touch(x); persist(true); render(); }
+      if (x && !LOCKED.includes(x.id)) softDelete(x, `Deleted category "${x.name}"`);
     },
     // --- timer
     extend: () => {
@@ -1731,8 +2009,62 @@
     },
     'tpl-del': (el) => {
       const t = live(data.templates).find((x) => x.id === el.dataset.id);
-      if (t && confirm(`Delete template "${t.name}"?`)) { t.deleted = true; touch(t); persist(true); render(); }
+      if (t) softDelete(t, `Deleted template "${t.name}"`);
     },
+    // --- v4
+    'toast-undo': () => { const f = toastUndo; toastUndo = null; $('#toast').hidden = true; if (f) f(); },
+    'set-focus': (el) => {
+      const s = data.sessions.find((x) => x.id === el.dataset.id); closeModal();
+      if (s) { s.focus = +el.dataset.v; touch(s); persist(true); render(); toast(`Focus ${s.focus}/5 saved`); }
+    },
+    'qa-add': () => {
+      const el = $('#qa'), txt = ((el && el.value) || '').trim();
+      if (!txt) { toast('Type what you did, e.g. Chemistry 11:00-12:30'); return; }
+      const r = parseQuickEntry(txt, ui.date);
+      if (r.error) { toast(r.error); return; }
+      if (!r.complete) {
+        const pre = { type: r.type, topic: r.topic, priority: r.priority };
+        if (r.start) pre.start = r.start;
+        if (r.seconds) pre.seconds = r.seconds;
+        entryModal(null, pre); return;
+      }
+      if (r.seconds < 60 || r.seconds > 20 * 3600) { toast('Duration should be between 1 minute and 20 hours'); return; }
+      const topic = r.topic || defaultLabel(r.type);
+      const rec = touch({ id: uid(), date: sessionDate(r.type, r.start, r.seconds), start: r.start, seconds: r.seconds, topic, type: r.type, priority: r.priority, comment: '' });
+      data.sessions.push(rec);
+      if (r.topic) ensureTopic(r.topic, r.type, r.priority);
+      offerBlockMatch(rec);
+      ui.date = rec.date; persist(true); render();
+      toast(`Added ${short(r.seconds)} of ${topic}`, () => { rec.deleted = true; touch(rec); persist(true); render(); });
+    },
+    'rest-toggle': (el) => {
+      const d = el.dataset.date, on = !isRest(d);
+      if (on) {
+        const wk = weekStart(d), lim = data.settings.restPerWeek ?? 1;
+        let used = 0;
+        for (let i = 0; i < 7; i++) { const x = addDays(wk, i); if (x !== d && isRest(x)) used++; }
+        if (used >= lim && !confirm(`You have already taken ${used} rest ${used === 1 ? 'day' : 'days'} this week (limit ${lim}). Mark this one too?`)) return;
+      }
+      data.rest[d] = { on, updatedAt: Date.now() }; persist(true); render();
+      toast(on ? 'Rest day set. Your streak is safe' : 'Rest day removed');
+    },
+    'ci-set': (el) => {
+      const d = ui.date, k = el.dataset.k, v = +el.dataset.v, ci = Object.assign({}, data.checkins[d]);
+      if (ci[k] === v) delete ci[k]; else ci[k] = v;
+      ci.updatedAt = Date.now(); data.checkins[d] = ci; persist(true); render();
+    },
+    'rv-prev': () => { ui.rv.anchor = addDays(ui.rv.anchor, -7); render(); },
+    'rv-next': () => { ui.rv.anchor = addDays(ui.rv.anchor, 7); render(); },
+    'rv-now': () => { ui.rv.anchor = todayStr(); render(); },
+    'install-now': async () => {
+      if (deferredInstall) {
+        const ev = deferredInstall; deferredInstall = null;
+        try { ev.prompt(); await ev.userChoice; } catch { /* ignore */ }
+        render();
+      } else installModal();
+    },
+    'install-dismiss': () => { try { localStorage.setItem('studytracker-install-dismissed', '1'); } catch { /* ignore */ } render(); },
+    'sound-test': () => ting(),
     // --- journal
     'jr-new': () => journalModal(null),
     'jr-edit': (el) => journalModal(el.dataset.date),
@@ -1744,7 +2076,11 @@
     },
     'jr-del': (el) => {
       const d = el.dataset.date;
-      if (confirm('Delete this journal entry?')) { data.journal[d] = { text: '', updatedAt: Date.now() }; closeModal(); persist(true); render(); }
+      const prev = data.journal[d] && data.journal[d].text;
+      if (prev !== undefined) {
+        data.journal[d] = { text: '', updatedAt: Date.now() }; closeModal(); persist(true); render();
+        toast('Deleted journal entry', () => { data.journal[d] = { text: prev, updatedAt: Date.now() }; persist(true); render(); });
+      }
     },
 
     'sync-connect': async () => {
@@ -1812,6 +2148,10 @@
       if (hit) { ui.form.priority = hit.priority; render(); }
     },
     'gap-cap': (el) => { data.settings.gapCapMin = Math.min(720, Math.max(10, parseInt(el.value, 10) || 120)); touch(data.settings); persist(true); render(); toast('Updated'); },
+    'rv-anchor': (el) => { if (el.value) { ui.rv.anchor = el.value; render(); } },
+    'rest-limit': (el) => { data.settings.restPerWeek = Math.min(7, Math.max(0, parseInt(el.value, 10) || 0)); touch(data.settings); persist(true); toast('Updated'); },
+    'ask-focus': (el) => { data.settings.askFocus = !!el.checked; touch(data.settings); persist(true); },
+    sound: (el) => { data.settings.sound = !!el.checked; touch(data.settings); persist(true); if (el.checked) ting(); },
     'tt-date': (el) => { if (el.value) { ui.tt.date = el.value; render(); } },
     'tt-anchor': (el) => { data.settings.dayStart = el.value || '05:00'; touch(data.settings); persist(true); render(); },
     'jr-month': (el) => { ui.jr.month = el.value; render(); },
@@ -1840,10 +2180,11 @@
     data = normalize(await store.load());
     // the clock may have ticked past midnight while the app was closed
     render();
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* ignore */ }
     setInterval(tick, 500);
     if (sync.token) runSync();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { get data() { return data; }, ui, render, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
+    window.__st = { get data() { return data; }, ui, render, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();
