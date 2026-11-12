@@ -41,19 +41,37 @@
   const live = (arr) => (arr || []).filter((x) => !x.deleted);
   const touch = (o) => { o.updatedAt = Date.now(); return o; };
 
-  const TYPES = {
-    study: { label: 'Study', color: '#2563eb' },
-    break: { label: 'Break', color: '#38bdf8' },
-    other: { label: 'Other', color: '#94a3b8' }
-  };
+  // Categories: built-in Study / Break / Sleep / Other plus your own (Workout, Meals, Class…).
+  // Each has a colour and a "kind" that decides how its time is counted.
+  const KINDS = { study: 'Study', break: 'Break', sleep: 'Sleep', neutral: 'Neutral' };
+  const KLABEL = { study: 'Study', break: 'Break', neutral: 'Other', sleep: 'Sleep' };
+  const KIND_COLOR = { study: '#2563eb', break: '#38bdf8', sleep: '#8b5cf6', neutral: '#94a3b8' };
+  const BUILTIN_CATS = [
+    { id: 'study', name: 'Study', color: '#2563eb', kind: 'study' },
+    { id: 'break', name: 'Break', color: '#38bdf8', kind: 'break' },
+    { id: 'sleep', name: 'Sleep', color: '#8b5cf6', kind: 'sleep' },
+    { id: 'other', name: 'Other', color: '#94a3b8', kind: 'neutral' }
+  ];
+  const LOCKED = ['study', 'break', 'sleep']; // cannot be deleted or change what they count as
+  const catRaw = (id) => ((data && data.categories) || []).find((x) => x.id === id);
+  function cats() {
+    const order = { study: 0, break: 1, sleep: 2, other: 3 };
+    return live(data.categories).sort((x, y) => (order[x.id] ?? 9) - (order[y.id] ?? 9) || x.name.localeCompare(y.name));
+  }
+  function cat(id) { return catRaw(id) || BUILTIN_CATS.find((x) => x.id === id) || { id, name: 'Other', color: '#94a3b8', kind: 'neutral' }; }
+  const kindOf = (id) => cat(id).kind;
+  const catOptions = (sel) => { const l = cats(), r = catRaw(sel); if (r && r.deleted) l.push(r); return l; };
+  const optHtml = (sel) => catOptions(sel).map((x) => `<option value="${esc(x.id)}" ${sel === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
+  const isWork = (s) => { const k = kindOf(s.type); return k === 'study' || k === 'neutral'; };
+  const sessionDate = (type, startMs, secs) => ymd(new Date(kindOf(type) === 'sleep' ? startMs + secs * 1000 : startMs)); // sleep counts on the day you wake up
   const PRIOS = {
     high: { label: 'High', color: '#e11d48', bg: '#fff1f2' },
     medium: { label: 'Medium', color: '#d97706', bg: '#fffbeb' },
     low: { label: 'Low', color: '#059669', bg: '#ecfdf5' }
   };
   const prioPill = (p) => `<span class="pill" style="background:${PRIOS[p].bg};color:${PRIOS[p].color}">${PRIOS[p].label}</span>`;
-  const typeDot = (t) => `<span class="tdot" style="background:${TYPES[t].color}"></span>`;
-  const defaultLabel = (type) => (type === 'break' ? 'Break' : type === 'other' ? 'Activity' : 'Study session');
+  const typeDot = (t) => `<span class="tdot" style="background:${cat(t).color}"></span>`;
+  const defaultLabel = (type) => { const k = kindOf(type); return k === 'break' ? 'Break' : k === 'sleep' ? 'Sleep' : k === 'study' ? 'Study session' : type === 'other' ? 'Activity' : cat(type).name; };
 
   // ---------- storage (Electron file, or localStorage when opened in a browser) ----------
   const store = window.api || {
@@ -88,16 +106,18 @@
       deviceId: uid(),
       topics: [],
       presets: [
-        { id: uid(), name: 'Pomodoro 25', topic: '', type: 'study', priority: 'medium', minutes: 25, updatedAt: t },
-        { id: uid(), name: 'Deep focus 50', topic: '', type: 'study', priority: 'high', minutes: 50, updatedAt: t },
-        { id: uid(), name: 'Short break 5', topic: '', type: 'break', priority: 'low', minutes: 5, updatedAt: t }
+        { id: 'preset-pomodoro-25', name: 'Pomodoro 25', topic: '', type: 'study', priority: 'medium', minutes: 25, updatedAt: t },
+        { id: 'preset-deep-focus-50', name: 'Deep focus 50', topic: '', type: 'study', priority: 'high', minutes: 50, updatedAt: t },
+        { id: 'preset-short-break-5', name: 'Short break 5', topic: '', type: 'break', priority: 'low', minutes: 5, updatedAt: t }
       ],
       sessions: [],
       journal: {},
+      categories: BUILTIN_CATS.map((b) => ({ ...b, updatedAt: 0 })),
       plans: {},
       templates: [],
-      settings: { dailyGoalMin: 240, dayStart: '05:00', updatedAt: t },
-      timer: null
+      settings: { dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, updatedAt: t },
+      timer: null,
+      timerUpdatedAt: 0
     };
   }
   function normalize(d) {
@@ -107,8 +127,11 @@
     d.deviceId = d.deviceId || base.deviceId;
     for (const k of ['topics', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
     if (!d.plans || typeof d.plans !== 'object' || Array.isArray(d.plans)) d.plans = {};
+    if (!Array.isArray(d.categories)) d.categories = [];
+    BUILTIN_CATS.forEach((b) => { if (!d.categories.some((x) => x.id === b.id)) d.categories.push({ ...b, updatedAt: 0 }); });
+    d.timerUpdatedAt = d.timerUpdatedAt || 0;
     if (!d.journal || typeof d.journal !== 'object') d.journal = {};
-    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', updatedAt: 0 }, d.settings || {});
+    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, updatedAt: 0 }, d.settings || {});
     if (!d.timer) d.timer = null;
     return d;
   }
@@ -139,6 +162,13 @@
       if (!out.plans[day] || (p.updatedAt || 0) > (out.plans[day].updatedAt || 0)) out.plans[day] = p;
     }
     out.templates = mergeById(out.templates, inc.templates);
+    out.categories = mergeById(out.categories, inc.categories);
+    { // older installs seeded default presets with random ids: hide exact duplicates
+      const seen = new Set();
+      out.presets.forEach((p) => { if (p.deleted) return; const k = [p.name, p.type, p.topic, p.minutes].join('|'); if (seen.has(k)) { p.deleted = true; p.updatedAt = Date.now(); } else seen.add(k); });
+    }
+    // the running timer is shared: the most recent start/pause/stop wins
+    if ((inc.timerUpdatedAt || 0) > (out.timerUpdatedAt || 0)) { out.timer = inc.timer || null; out.timerUpdatedAt = inc.timerUpdatedAt; }
     if ((inc.settings.updatedAt || 0) > (out.settings.updatedAt || 0)) out.settings = inc.settings;
     return out;
   }
@@ -199,7 +229,7 @@
     const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
     try { return JSON.parse(text); } catch { return null; }
   }
-  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, presets: d.presets, sessions: d.sessions, journal: d.journal, plans: d.plans, templates: d.templates, settings: d.settings });
+  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, presets: d.presets, sessions: d.sessions, journal: d.journal, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
 
   async function runSync() {
     if (!sync.token) return;
@@ -241,7 +271,7 @@
   }
   document.addEventListener('visibilitychange', () => { if (!document.hidden) runSync(); });
   window.addEventListener('online', () => runSync());
-  setInterval(() => { if (!document.hidden) runSync(); }, 90000);
+  setInterval(() => { if (!document.hidden) runSync(); }, 45000);
 
   function syncCard() {
     if (!sync.token) {
@@ -302,38 +332,41 @@
   function startTimer(spec) {
     const topic = (spec.topic || '').trim();
     data.timer = {
-      topic, type: spec.type, priority: spec.priority,
+      id: uid(), topic, type: spec.type, priority: spec.priority,
       mode: spec.mode, targetSec: spec.mode === 'countdown' ? Math.round(spec.minutes * 60) : 0,
       accumulatedMs: 0, startedAt: Date.now(), startWall: Date.now(), comment: '', alerted: false,
       blockId: spec.blockId || null, planDate: spec.planDate || null
     };
+    data.timerUpdatedAt = Date.now();
     persist(true);
     ui.page = 'today'; ui.date = todayStr();
     render();
   }
   function pauseTimer() {
     const t = data.timer; if (!t || !t.startedAt) return;
-    t.accumulatedMs = elapsedMs(t); t.startedAt = null;
+    t.accumulatedMs = elapsedMs(t); t.startedAt = null; data.timerUpdatedAt = Date.now();
     persist(true); render();
   }
   function resumeTimer() {
     const t = data.timer; if (!t || t.startedAt) return;
-    t.startedAt = Date.now();
+    t.startedAt = Date.now(); data.timerUpdatedAt = Date.now();
     persist(true); render();
   }
   function stopTimer(save) {
     const t = data.timer; if (!t) return;
     const secs = Math.round(elapsedMs(t) / 1000);
-    data.timer = null;
+    data.timer = null; data.timerUpdatedAt = Date.now();
     if (save && secs >= 1) {
       const name = t.topic || defaultLabel(t.type);
+      const sid = t.id ? 'tm-' + t.id : uid(); // same id on every device, so stopping on two devices cannot double-count
+      data.sessions = data.sessions.filter((x) => x.id !== sid);
       data.sessions.push(touch({
-        id: uid(), date: ymd(new Date(t.startWall)), start: t.startWall, seconds: secs,
+        id: sid, date: sessionDate(t.type, t.startWall, secs), start: t.startWall, seconds: secs,
         topic: name, type: t.type, priority: t.priority, comment: (t.comment || '').trim(),
         ...(t.blockId ? { blockId: t.blockId, planDate: t.planDate } : {})
       }));
       ensureTopic(t.topic, t.type, t.priority);
-      ui.date = ymd(new Date(t.startWall));
+      ui.date = sessionDate(t.type, t.startWall, secs);
       toast(`Saved ${short(secs)} of ${name}`);
     } else if (save) {
       toast('Too short to save (under 1 second)');
@@ -342,7 +375,7 @@
   }
   function ensureTopic(name, type, priority) {
     name = (name || '').trim();
-    if (!name || type === 'break') return;
+    if (!name || kindOf(type) === 'break' || kindOf(type) === 'sleep') return;
     const ex = live(data.topics).find((x) => x.name.toLowerCase() === name.toLowerCase());
     if (!ex) data.topics.push(touch({ id: uid(), name, type, priority }));
   }
@@ -399,12 +432,12 @@
   // ---------- derived data ----------
   const sessionsOn = (d) => live(data.sessions).filter((s) => s.date === d).sort((a, b) => a.start - b.start);
   function totals(list) {
-    const t = { study: 0, break: 0, other: 0 };
-    list.forEach((s) => { t[s.type] = (t[s.type] || 0) + s.seconds; });
+    const t = { study: 0, break: 0, sleep: 0, neutral: 0 };
+    list.forEach((s) => { t[kindOf(s.type)] += s.seconds; });
     return t;
   }
   function streak() {
-    const days = new Set(live(data.sessions).filter((s) => s.type === 'study').map((s) => s.date));
+    const days = new Set(live(data.sessions).filter((s) => kindOf(s.type) === 'study').map((s) => s.date));
     let d = todayStr(), n = 0;
     if (!days.has(d)) d = addDays(d, -1);
     while (days.has(d)) { n++; d = addDays(d, -1); }
@@ -415,12 +448,141 @@
   }
 
   // =====================================================================
+  //  GAPS: time between logged entries counts as break automatically
+  // =====================================================================
+  const gapCapMin = () => data.settings.gapCapMin || 120;
+  function dayStats(d) {
+    const list = sessionsOn(d), tot = totals(list), isToday = d === todayStr(), now = Date.now();
+    const iv = list.map((s) => ({ s: s.start, e: s.start + s.seconds * 1000, kind: kindOf(s.type) }));
+    if (isToday && data.timer) iv.push({ s: data.timer.startWall, e: now, kind: kindOf(data.timer.type) });
+    const sleeps = iv.filter((x) => x.kind === 'sleep').sort((x, y) => (y.e - y.s) - (x.e - x.s));
+    const wake = sleeps.length ? sleeps[0].e : null;
+    const occ = iv.filter((x) => x.kind !== 'sleep' || (wake !== null && x.s >= wake - 60000 && x !== sleeps[0])).sort((x, y) => x.s - y.s);
+    const gaps = [];
+    let cursor = wake !== null ? wake : (occ.length ? occ[0].s : null);
+    if (cursor !== null) {
+      const push = (s, e) => { if (e - s >= 60000) gaps.push({ s, e, sec: Math.round((e - s) / 1000), kind: (e - s) / 1000 <= gapCapMin() * 60 ? 'break' : 'untracked' }); };
+      occ.forEach((o) => { if (o.s > cursor) push(cursor, o.s); cursor = Math.max(cursor, o.e); });
+      if (isToday && now > cursor) push(cursor, now);
+    }
+    const gapBreak = gaps.filter((g) => g.kind === 'break').reduce((n, g) => n + g.sec, 0);
+    const untracked = gaps.filter((g) => g.kind === 'untracked').reduce((n, g) => n + g.sec, 0);
+    return { tot, gaps, gapBreak, untracked };
+  }
+  function sleepLine(d, ds) {
+    const s = ds.tot.sleep;
+    return `<div class="sleepline"><span class="tdot" style="background:${cat('sleep').color}"></span>
+        <span>${s ? `Slept <b>${short(s)}</b> ${d === todayStr() ? 'last night' : 'that night'}` : 'No sleep logged'}</span>
+        <button class="linkbtn" data-action="sleep-log">Log sleep</button></div>
+      ${ds.untracked ? `<div class="note" style="margin-top:8px">Untracked: <b>${short(ds.untracked)}</b>. Gaps over ${fmtDur(gapCapMin())} are not counted as break.</div>` : ''}`;
+  }
+
+  // =====================================================================
+  //  STARTING A TIMER WHILE ONE IS RUNNING
+  // =====================================================================
+  function choiceModal(title, bodyHtml, buttons) {
+    $('#modal-root').innerHTML = `
+      <div class="overlay" data-action="modal-bg">
+        <div class="modal" role="dialog" aria-label="${esc(title)}">
+          <h3>${esc(title)}</h3>
+          <div>${bodyHtml}</div>
+          <div class="foot wrap">${buttons.map((b, i) => `<button class="btn ${b.cls || ''}" data-ch="${i}">${esc(b.label)}</button>`).join('')}</div>
+        </div>
+      </div>`;
+    $$('[data-ch]').forEach((el) => { el.onclick = () => { closeModal(); const f = buttons[+el.dataset.ch].fn; if (f) f(); }; });
+  }
+  function requestStart(spec) {
+    const t = data.timer;
+    if (!t) { startTimer(spec); return; }
+    const secs = Math.round(elapsedMs(t) / 1000), sleep = kindOf(t.type) === 'sleep';
+    choiceModal('A timer is already running', `
+      <p style="line-height:1.55;margin-bottom:6px"><b>${esc(t.topic || defaultLabel(t.type))}</b> <span class="note">(${esc(cat(t.type).name)})</span> has been running for <b>${short(secs)}</b>.</p>
+      <p class="note" style="margin-bottom:16px">${sleep ? 'Save it as sleep and start the new timer?' : 'Stop and save it before starting the new timer?'}</p>`, [
+      { label: 'Cancel' },
+      { label: 'Discard it', cls: 'danger', fn: () => { stopTimer(false); startTimer(spec); } },
+      { label: 'Stop & save, then start', cls: 'primary', fn: () => { stopTimer(true); startTimer(spec); } }
+    ]);
+  }
+
+  // =====================================================================
+  //  SLEEP (manual log) and CATEGORIES
+  // =====================================================================
+  function slInstant(n) {
+    const d = $('#sl-d' + n).value, t = $('#sl-t' + n).value;
+    if (!d || !t) return NaN;
+    const [h, m] = t.split(':').map(Number), x = parseYmd(d); x.setHours(h, m, 0, 0);
+    return x.getTime();
+  }
+  function updateSleepSum() {
+    const el = $('#sl-sum'); if (!el) return;
+    const a = slInstant(1), b = slInstant(2);
+    el.textContent = b > a ? `Sleep: ${short((b - a) / 1000)}` : '';
+  }
+  function sleepModal() {
+    const today = todayStr(), y = addDays(today, -1);
+    openModal('Log sleep', `
+      <div class="row">
+        <div class="field grow"><label>Went to sleep</label><input type="date" id="sl-d1" data-bind="sl-calc" value="${y}"></div>
+        <div class="field grow"><label>Time</label><input type="time" id="sl-t1" data-bind="sl-calc" value="23:00"></div>
+      </div>
+      <div class="row">
+        <div class="field grow"><label>Woke up</label><input type="date" id="sl-d2" data-bind="sl-calc" value="${today}"></div>
+        <div class="field grow"><label>Time</label><input type="time" id="sl-t2" data-bind="sl-calc" value="06:30"></div>
+      </div>
+      <div class="note" id="sl-sum" style="margin-bottom:10px"></div>
+      <p class="note">Sleep is counted on the day you wake up and is kept out of your study and break totals.</p>`, () => {
+      const a = slInstant(1), b = slInstant(2);
+      if (!(b > a)) { toast('Wake-up must be after bedtime'); return false; }
+      if (b - a < 600000) { toast('Sleep must be at least 10 minutes'); return false; }
+      if (b - a > 20 * 3600000) { toast('That is over 20 hours – check the dates'); return false; }
+      data.sessions.push(touch({ id: uid(), date: ymd(new Date(b)), start: a, seconds: Math.round((b - a) / 1000), topic: 'Sleep', type: 'sleep', priority: 'low', comment: '' }));
+      ui.date = ymd(new Date(b)); ui.page = 'today';
+      persist(true); render(); toast(`Logged ${short((b - a) / 1000)} of sleep`);
+    }, 'Save sleep');
+    updateSleepSum();
+  }
+
+  function categoriesCard() {
+    return `<div class="card">
+      <h2>Categories <button class="btn sm primary" data-action="cat-add">+ New category</button></h2>
+      ${cats().map((x) => `
+        <div class="list-row">
+          <div class="grow"><div class="nm"><span class="tdot" style="background:${x.color}"></span>${esc(x.name)}</div>
+            <div class="meta">Counts as ${KINDS[x.kind].toLowerCase()}${LOCKED.includes(x.id) ? ' · built in' : ''}</div></div>
+          <button class="btn sm" data-action="cat-edit" data-id="${x.id}">Edit</button>
+          ${LOCKED.includes(x.id) ? '' : `<button class="btn sm danger" data-action="cat-del" data-id="${x.id}">Delete</button>`}
+        </div>`).join('')}
+      <p class="note" style="margin-top:10px"><b>Study</b> counts towards goals and streaks, <b>Break</b> is rest, <b>Sleep</b> is tracked separately, and <b>Neutral</b> is anything else (workout, meals, class…).</p>
+    </div>`;
+  }
+  function catModal(existing) {
+    const x = existing || { name: '', color: '#14b8a6', kind: 'neutral' };
+    const locked = !!existing && LOCKED.includes(existing.id);
+    openModal(existing ? 'Edit category' : 'New category', `
+      <div class="field"><label>Name</label><input type="text" id="c-name" value="${esc(x.name)}" placeholder="e.g. Workout, Meals, Class"></div>
+      <div class="row">
+        <div class="field grow"><label>Colour</label><input type="color" id="c-color" value="${esc(x.color)}"></div>
+        <div class="field grow"><label>Counts as</label><select id="c-kind" ${locked ? 'disabled' : ''}>${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${x.kind === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      </div>
+      <p class="note">Study counts towards your daily goal and streak. Break is rest. Sleep is tracked separately. Neutral is everything else.</p>`, () => {
+      const name = $('#c-name').value.trim();
+      if (!name) { toast('Give the category a name'); return false; }
+      if (cats().some((y) => y.name.toLowerCase() === name.toLowerCase() && (!existing || y.id !== existing.id))) { toast('A category with that name already exists'); return false; }
+      const rec = existing || { id: uid() };
+      Object.assign(rec, { name, color: $('#c-color').value || x.color, kind: locked ? existing.kind : $('#c-kind').value });
+      touch(rec);
+      if (!existing) data.categories.push(rec);
+      persist(true); render();
+    });
+  }
+
+  // =====================================================================
   //  TODAY PAGE
   // =====================================================================
   function pageToday() {
     const d = ui.date, isToday = d === todayStr();
     const list = sessionsOn(d);
-    const tot = totals(list);
+    const ds = dayStats(d), tot = ds.tot;
     const goal = data.settings.dailyGoalMin * 60;
     const pct = goal ? Math.min(100, tot.study / goal * 100) : 0;
     const journal = (data.journal[d] && data.journal[d].text) || '';
@@ -447,13 +609,15 @@
           <div class="card">
             <h2>Summary <small>${list.length} ${list.length === 1 ? 'entry' : 'entries'}</small></h2>
             <div class="tiles">
-              ${['study', 'break', 'other'].map((k) => `
-                <div class="tile"><div class="k">${typeDot(k)}${TYPES[k].label}</div><div class="v">${short(tot[k])}</div></div>`).join('')}
+              <div class="tile"><div class="k">${typeDot('study')}Study</div><div class="v">${short(tot.study)}</div></div>
+              <div class="tile"><div class="k">${typeDot('break')}Break</div><div class="v">${short(tot.break + ds.gapBreak)}</div>${ds.gapBreak ? `<div class="s">incl. ${short(ds.gapBreak)} gaps</div>` : ''}</div>
+              <div class="tile"><div class="k">${typeDot('other')}Other</div><div class="v">${short(tot.neutral)}</div></div>
             </div>
             <div class="goal">
               <div class="gl"><span>Daily study goal</span><span>${short(tot.study)} / ${short(goal)}</span></div>
               <div class="bar"><i style="width:${pct}%"></i></div>
             </div>
+            ${sleepLine(d, ds)}
           </div>
           <div class="card">
             <h2>Journal <button class="linkbtn" data-action="nav" data-page="journal">All entries →</button></h2>
@@ -464,7 +628,7 @@
       </div>
       <div class="card" style="margin-top:20px">
         <h2>Activity log <button class="btn sm primary" data-action="entry-add">+ Add entry</button></h2>
-        ${logTable(list)}
+        ${logTable(list, ds)}
       </div>`;
   }
 
@@ -476,7 +640,7 @@
         <div class="timer-run">
           <div class="what">${esc(label)}</div>
           <div class="badges">
-            <span class="pill" style="background:#eff6ff;color:${TYPES[t.type].color}">${TYPES[t.type].label}</span>
+            <span class="pill" style="background:#eff6ff;color:${cat(t.type).color}">${esc(cat(t.type).name)}</span>
             ${prioPill(t.priority)}
             ${t.blockId ? '<span class="pill" style="background:#eff6ff;color:#1d4ed8">From timetable</span>' : ''}
           </div>
@@ -488,14 +652,14 @@
               ? '<button class="btn big" data-action="pause">Pause</button>'
               : '<button class="btn big primary" data-action="resume">Resume</button>'}
             ${t.mode === 'countdown' ? '<button class="btn big" data-action="extend">+10 min</button>' : ''}
-            <button class="btn big primary" data-action="stop">Stop &amp; save</button>
+            <button class="btn big primary" data-action="stop">${kindOf(t.type) === 'sleep' ? 'Woke up &amp; save' : 'Stop &amp; save'}</button>
             <button class="btn big danger" data-action="discard">Discard</button>
           </div>
           <input type="text" data-bind="run-comment" placeholder="Add a comment (optional)" value="${esc(t.comment)}">
         </div>`;
     }
 
-    const f = ui.form;
+    const f = ui.form, fk = kindOf(f.type);
     const topics = live(data.topics).filter((x) => x.type === f.type);
     const presets = live(data.presets);
     return `
@@ -503,13 +667,13 @@
       <div class="field">
         <label>Activity</label>
         <div class="seg">
-          ${Object.entries(TYPES).map(([k, v]) => `<button class="${f.type === k ? 'on' : ''}" data-action="set-type" data-v="${k}"><span class="dot" style="background:${v.color}"></span>${v.label}</button>`).join('')}
+          ${cats().map((x) => `<button class="${f.type === x.id ? 'on' : ''}" data-action="set-type" data-v="${esc(x.id)}"><span class="dot" style="background:${x.color}"></span>${esc(x.name)}</button>`).join('')}
         </div>
       </div>
       <div class="field">
-        <label>${f.type === 'break' ? 'Label (optional)' : 'Topic'}</label>
+        <label>${fk === 'break' || fk === 'sleep' ? 'Label (optional)' : 'Topic'}</label>
         <input type="text" id="f-topic" list="topic-list" data-bind="f-topic" data-change="f-topic-change" autocomplete="off"
-          placeholder="${f.type === 'break' ? 'e.g. Tea, walk, lunch' : 'Type a topic or pick a saved one'}" value="${esc(f.topic)}">
+          placeholder="${fk === 'break' ? 'e.g. Tea, walk, lunch' : fk === 'sleep' ? 'e.g. Night sleep, nap' : 'Type a topic or pick a saved one'}" value="${esc(f.topic)}">
         <datalist id="topic-list">${topics.map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist>
       </div>
       <div class="field">
@@ -533,18 +697,39 @@
         <label>Presets</label>
         <div class="chips">${presets.map((p) => `<button class="chip" data-action="use-preset" data-id="${p.id}">${esc(p.name)}</button>`).join('')}</div>
       </div>` : ''}
-      <button class="btn primary big" data-action="start">Start</button>`;
+      <button class="btn primary big" data-action="start">Start</button>
+      <div class="row tight" style="margin-top:14px">
+        <button class="btn" data-action="go-sleep">Going to sleep</button>
+        <button class="btn" data-action="sleep-log">Log sleep</button>
+      </div>`;
   }
 
-  function logTable(list) {
-    if (!list.length) return `<div class="empty"><b>Nothing logged yet</b>Start the timer above, or add an entry manually.</div>`;
-    return `
-      <div class="tbl-scroll"><table class="tbl">
-        <thead><tr><th>#</th><th>Topic</th><th>Time</th><th>Priority</th><th>Duration</th><th>Comment</th><th></th></tr></thead>
-        <tbody>
-          ${list.map((s, i) => `
+  function logTable(list, ds) {
+    const gaps = ds ? ds.gaps : [];
+    if (!list.length && !gaps.length) return `<div class="empty"><b>Nothing logged yet</b>Start the timer above, or add an entry manually.</div>`;
+    const rows = [...list.map((s) => ({ t: s.start, s })), ...gaps.map((g) => ({ t: g.s, g }))].sort((x, y) => x.t - y.t);
+    let n = 0;
+    const body = rows.map((r) => {
+      if (r.g) {
+        const g = r.g, auto = g.kind === 'break';
+        return `
+            <tr class="gap-row">
+              <td class="num"></td>
+              <td><div class="topic-cell"><span class="tdot" style="background:${auto ? KIND_COLOR.break : '#cbd5e1'}"></span>${auto ? 'Gap, counted as break' : 'Untracked'} <span class="note" style="margin-left:6px">${fmtTime(g.s)}–${fmtTime(g.e)}</span></div></td>
+              <td>${fmtTime(g.s)}</td>
+              <td></td>
+              <td class="dur">${hms(g.sec)}</td>
+              <td class="cmt"></td>
+              <td class="act">
+                ${auto ? '' : `<button class="btn sm" data-action="gap-break" data-s="${g.s}" data-e="${g.e}">Count as break</button>`}
+                <button class="btn sm" data-action="gap-label" data-s="${g.s}" data-e="${g.e}">Label</button>
+              </td>
+            </tr>`;
+      }
+      const s = r.s;
+      return `
             <tr>
-              <td class="num">${i + 1}</td>
+              <td class="num">${++n}</td>
               <td><div class="topic-cell">${typeDot(s.type)}${esc(s.topic)}</div></td>
               <td>${fmtTime(s.start)}</td>
               <td>${prioPill(s.priority)}</td>
@@ -554,7 +739,12 @@
                 <button class="btn sm" data-action="entry-edit" data-id="${s.id}">Edit</button>
                 <button class="btn sm danger" data-action="entry-del" data-id="${s.id}">Delete</button>
               </td>
-            </tr>`).join('')}
+            </tr>`;
+    }).join('');
+    return `
+      <div class="tbl-scroll"><table class="tbl">
+        <thead><tr><th>#</th><th>Topic</th><th>Time</th><th>Priority</th><th>Duration</th><th>Comment</th><th></th></tr></thead>
+        <tbody>${body}
         </tbody>
       </table></div>`;
   }
@@ -564,15 +754,15 @@
   }
 
   // ---------- entry modal (add / edit) ----------
-  function entryModal(existing) {
-    const s = existing || {
+  function entryModal(existing, pre) {
+    const s = existing || Object.assign({
       type: 'study', topic: '', priority: 'medium', seconds: 1800, comment: '',
       start: (() => { const n = new Date(); const base = parseYmd(ui.date); base.setHours(n.getHours(), n.getMinutes(), 0, 0); return base.getTime(); })()
-    };
+    }, pre || {});
     const startD = new Date(s.start);
     const body = `
       <div class="field"><label>Activity</label>
-        <select id="m-type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${s.type === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+        <select id="m-type">${optHtml(s.type)}</select></div>
       <div class="field"><label>Topic</label>
         <input type="text" id="m-topic" list="m-topics" value="${esc(existing ? s.topic : '')}" placeholder="Topic or label" autocomplete="off">
         <datalist id="m-topics">${live(data.topics).map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>
@@ -604,11 +794,11 @@
       const topic = $('#m-topic').value.trim() || defaultLabel(type);
       const prio = $('#m-prio').value;
       const rec = existing || { id: uid() };
-      Object.assign(rec, { date, start: day.getTime(), seconds: secs, topic, type, priority: prio, comment: $('#m-comment').value.trim() });
+      Object.assign(rec, { date: sessionDate(type, day.getTime(), secs), start: day.getTime(), seconds: secs, topic, type, priority: prio, comment: $('#m-comment').value.trim() });
       touch(rec);
       if (!existing) { data.sessions.push(rec); offerBlockMatch(rec); }
       if ($('#m-topic').value.trim()) ensureTopic($('#m-topic').value, type, prio);
-      ui.date = date;
+      ui.date = rec.date;
       persist(true); render();
     });
     updateEnd();
@@ -643,7 +833,11 @@
     const today = todayStr();
     const elapsedDays = Math.max(1, Math.min(nDays, daysBetween(r.from, r.to < today ? r.to : today)));
     const perDay = {};
-    all.forEach((s) => { (perDay[s.date] = perDay[s.date] || { study: 0, break: 0, other: 0 })[s.type] += s.seconds; });
+    all.forEach((s) => { (perDay[s.date] = perDay[s.date] || { study: 0, break: 0, neutral: 0, sleep: 0 })[kindOf(s.type)] += s.seconds; });
+    let gapSum = 0;
+    Object.keys(perDay).forEach((d) => { const g = dayStats(d).gapBreak; perDay[d].break += g; gapSum += g; });
+    tot.break += gapSum; // time between entries counts as break
+    const sleepNights = Object.values(perDay).filter((x) => x.sleep > 0).length;
     const activeDays = Object.values(perDay).filter((x) => x.study > 0).length;
     let best = null;
     Object.entries(perDay).forEach(([d, x]) => { if (!best || x.study > best.sec) best = { d, sec: x.study }; });
@@ -674,14 +868,17 @@
           <div class="tile"><div class="k">Best day</div><div class="v">${best && best.sec ? short(best.sec) : '–'}</div><div class="s">${best && best.sec ? fmtShort(best.d) : 'no data yet'}</div></div>
           <div class="tile"><div class="k">Breaks</div><div class="v">${short(tot.break)}</div><div class="s">${tot.study ? Math.round(tot.break / tot.study * 100) + '% of study' : '–'}</div></div>
           ${adhTile(r)}
+          <div class="tile"><div class="k">Avg sleep</div><div class="v">${sleepNights ? short(tot.sleep / sleepNights) : '–'}</div><div class="s">${sleepNights ? 'over ' + sleepNights + (sleepNights === 1 ? ' night' : ' nights') : 'no sleep logged'}</div></div>
           <div class="tile"><div class="k">Streak</div><div class="v">${streak()}<span style="font-size:14px;color:var(--muted)"> ${streak() === 1 ? 'day' : 'days'}</span></div><div class="s">current</div></div>
         </div>
 
         <div class="card">
           <h2>${nDays > 62 ? 'Weekly' : 'Daily'} time <small>hours</small></h2>
           <div class="chart-wrap">${barChart(r, perDay, nDays)}</div>
-          <div class="legend">${Object.entries(TYPES).map(([k, v]) => `<span>${typeDot(k)}${v.label}</span>`).join('')}</div>
+          <div class="legend">${['study', 'break', 'neutral'].map((k) => `<span><span class="tdot" style="background:${KIND_COLOR[k]}"></span>${KLABEL[k]}</span>`).join('')}</div>
         </div>
+
+        ${tot.sleep && nDays <= 62 ? `<div class="card"><h2>Sleep <small>hours per night</small></h2><div class="chart-wrap">${barChart(r, perDay, nDays, ['sleep'])}</div></div>` : ''}
 
         ${p.mode === 'month' ? `<div class="card"><h2>Calendar <small>darker = more study · click a day to open it</small></h2>${heatmap(r, perDay)}</div>` : ''}
 
@@ -692,27 +889,30 @@
       </div>`;
   }
 
-  function barChart(r, perDay, nDays) {
-    // bucket by day (<= 62 days) or by week
+  function barChart(r, perDay, nDays, keys = ['study', 'break', 'neutral']) {
     const buckets = [];
+    const zero = () => Object.fromEntries(keys.map((k) => [k, 0]));
     if (nDays <= 62) {
       for (let i = 0; i < nDays; i++) {
-        const d = addDays(r.from, i), x = perDay[d] || { study: 0, break: 0, other: 0 };
-        buckets.push({ label: String(parseYmd(d).getDate()), tip: `${fmtShort(d)}`, ...x });
+        const d = addDays(r.from, i), x = perDay[d] || {};
+        const b = { label: String(parseYmd(d).getDate()), tip: fmtShort(d), ...zero() };
+        keys.forEach((k) => { b[k] = x[k] || 0; });
+        buckets.push(b);
       }
     } else {
       let cur = r.from;
       while (cur <= r.to) {
         const end = addDays(cur, 6) > r.to ? r.to : addDays(cur, 6);
-        const b = { label: fmtShort(cur), tip: `${fmtShort(cur)} – ${fmtShort(end)}`, study: 0, break: 0, other: 0 };
-        for (let d = cur; d <= end; d = addDays(d, 1)) { const x = perDay[d]; if (x) { b.study += x.study; b.break += x.break; b.other += x.other; } }
+        const b = { label: fmtShort(cur), tip: `${fmtShort(cur)} – ${fmtShort(end)}`, ...zero() };
+        for (let d = cur; d <= end; d = addDays(d, 1)) { const x = perDay[d]; if (x) keys.forEach((k) => { b[k] += x[k] || 0; }); }
         buckets.push(b); cur = addDays(end, 1);
       }
     }
     const narrow = window.innerWidth <= 760;
     const W = narrow ? 400 : 820, H = narrow ? 230 : 250, L = narrow ? 40 : 46, R = 6, T = 12, B = 28;
     const iw = W - L - R, ih = H - T - B;
-    const maxH = Math.max(...buckets.map((b) => (b.study + b.break + b.other) / 3600), 0);
+    const sumOf = (b) => keys.reduce((n, k) => n + b[k], 0);
+    const maxH = Math.max(...buckets.map((b) => sumOf(b) / 3600), 0);
     const top = Math.max(1, Math.ceil(maxH));
     const slot = iw / buckets.length, bw = Math.min(36, Math.max(3, slot * 0.64));
     const y = (h) => T + ih - (h / top) * ih;
@@ -725,12 +925,12 @@
     buckets.forEach((b, i) => {
       const x = L + slot * i + (slot - bw) / 2;
       let acc = 0;
-      const tip = `${b.tip}\nStudy ${short(b.study)} · Break ${short(b.break)} · Other ${short(b.other)}`;
-      ['study', 'break', 'other'].forEach((k) => {
+      const tip = `${b.tip}\n` + keys.map((k) => `${KLABEL[k]} ${short(b[k])}`).join(' · ');
+      keys.forEach((k, ki) => {
         const h = b[k] / 3600;
         if (h <= 0) return;
         const y1 = y(acc + h), y0 = y(acc);
-        g += `<rect x="${x}" y="${y1}" width="${bw}" height="${Math.max(1, y0 - y1)}" fill="${TYPES[k].color}" rx="${k === 'study' ? 3 : 0}"><title>${esc(tip)}</title></rect>`;
+        g += `<rect x="${x}" y="${y1}" width="${bw}" height="${Math.max(1, y0 - y1)}" fill="${KIND_COLOR[k]}" rx="${ki === 0 ? 3 : 0}"><title>${esc(tip)}</title></rect>`;
         acc += h;
       });
       if (!acc) g += `<rect x="${x}" y="${y(0) - 2}" width="${bw}" height="2" fill="#e2e8f0"><title>${esc(b.tip)}: nothing logged</title></rect>`;
@@ -758,7 +958,7 @@
 
   function topicBreakdown(list) {
     const map = new Map();
-    list.filter((s) => s.type !== 'break').forEach((s) => {
+    list.filter(isWork).forEach((s) => {
       const k = s.topic.toLowerCase();
       const e = map.get(k) || { name: s.topic, sec: 0, priority: s.priority, last: 0 };
       e.sec += s.seconds;
@@ -775,7 +975,7 @@
   }
   function prioBreakdown(list) {
     const t = { high: 0, medium: 0, low: 0 };
-    list.filter((s) => s.type !== 'break').forEach((s) => { t[s.priority] += s.seconds; });
+    list.filter(isWork).forEach((s) => { t[s.priority] += s.seconds; });
     const max = Math.max(...Object.values(t), 1);
     return Object.entries(PRIOS).map(([k, v]) => `
       <div class="hrow"><div class="nm">${prioPill(k)}</div>
@@ -783,10 +983,10 @@
         <div class="val">${short(t[k])}</div></div>`).join('');
   }
   function splitBar(tot) {
-    const sum = tot.study + tot.break + tot.other;
+    const ks = ['study', 'break', 'neutral'], sum = ks.reduce((n, k) => n + tot[k], 0);
     if (!sum) return '<div class="note">Nothing logged in this range.</div>';
-    return `<div class="stackbar">${['study', 'break', 'other'].map((k) => `<i style="width:${tot[k] / sum * 100}%;background:${TYPES[k].color}" title="${TYPES[k].label} ${short(tot[k])}"></i>`).join('')}</div>
-      <div class="legend">${['study', 'break', 'other'].map((k) => `<span>${typeDot(k)}${TYPES[k].label} ${Math.round(tot[k] / sum * 100)}%</span>`).join('')}</div>`;
+    return `<div class="stackbar">${ks.map((k) => `<i style="width:${tot[k] / sum * 100}%;background:${KIND_COLOR[k]}" title="${KLABEL[k]} ${short(tot[k])}"></i>`).join('')}</div>
+      <div class="legend">${ks.map((k) => `<span><span class="tdot" style="background:${KIND_COLOR[k]}"></span>${KLABEL[k]} ${Math.round(tot[k] / sum * 100)}%</span>`).join('')}</div>`;
   }
 
   // =====================================================================
@@ -804,13 +1004,14 @@
             ${topics.length ? topics.map((t) => `
               <div class="list-row">
                 <div class="grow"><div class="nm">${typeDot(t.type)}${esc(t.name)}</div>
-                  <div class="meta">${TYPES[t.type].label} · ${short(topicTotal(t.name))} logged in total</div></div>
+                  <div class="meta">${esc(cat(t.type).name)} · ${short(topicTotal(t.name))} logged in total</div></div>
                 ${prioPill(t.priority)}
                 <button class="btn sm" data-action="topic-edit" data-id="${t.id}">Edit</button>
                 <button class="btn sm danger" data-action="topic-del" data-id="${t.id}">Delete</button>
               </div>`).join('')
             : '<div class="empty"><b>No saved topics yet</b>Add one here, or just start a timer – new topics are saved automatically.</div>'}
           </div>
+          ${categoriesCard()}
         </div>
         <div class="stack">
           <div class="card">
@@ -819,7 +1020,7 @@
               <div class="list-row">
                 <div class="grow"><div class="nm">${typeDot(p.type)}${esc(p.name)}</div>
                   <div class="meta">${prioPill(p.priority)} ${p.minutes ? p.minutes + ' min' : 'Stopwatch'}${p.topic ? ' · ' + esc(p.topic) : ''}</div></div>
-                <button class="btn sm primary" data-action="preset-start" data-id="${p.id}" ${data.timer ? 'disabled title="A timer is already running"' : ''}>Start</button>
+                <button class="btn sm primary" data-action="preset-start" data-id="${p.id}">Start</button>
                 <button class="btn sm" data-action="preset-edit" data-id="${p.id}">Edit</button>
                 <button class="btn sm danger" data-action="preset-del" data-id="${p.id}">Delete</button>
               </div>`).join('') : '<div class="empty"><b>No presets</b>A preset remembers a topic, importance and duration.</div>'}
@@ -829,6 +1030,8 @@
             <h2>Settings &amp; backup</h2>
             <div class="field"><label>Daily study goal (minutes)</label>
               <input type="number" min="0" max="1440" step="15" data-change="goal" value="${data.settings.dailyGoalMin}"></div>
+            <div class="field"><label>Longest gap counted as break (minutes)</label>
+              <input type="number" min="10" max="720" step="10" data-change="gap-cap" value="${gapCapMin()}"></div>
             <div class="row">
               <button class="btn" data-action="export">Export backup</button>
               <button class="btn" data-action="import">Import &amp; merge</button>
@@ -844,7 +1047,7 @@
     const t = existing || { name: '', type: 'study', priority: 'medium' };
     openModal(existing ? 'Edit topic' : 'New topic', `
       <div class="field"><label>Name</label><input type="text" id="t-name" value="${esc(t.name)}" placeholder="e.g. Organic Chemistry"></div>
-      <div class="field"><label>Type</label><select id="t-type">${['study', 'other'].map((k) => `<option value="${k}" ${t.type === k ? 'selected' : ''}>${TYPES[k].label}</option>`).join('')}</select></div>
+      <div class="field"><label>Type</label><select id="t-type">${cats().filter((x) => x.kind === 'study' || x.kind === 'neutral').map((x) => `<option value="${esc(x.id)}" ${t.type === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
       <div class="field"><label>Default importance</label><select id="t-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>`,
     () => {
       const name = $('#t-name').value.trim();
@@ -863,7 +1066,7 @@
     const p = existing || { name: '', topic: '', type: 'study', priority: 'medium', minutes: 25 };
     openModal(existing ? 'Edit preset' : 'New preset', `
       <div class="field"><label>Preset name</label><input type="text" id="p-name" value="${esc(p.name)}" placeholder="e.g. Physics deep focus"></div>
-      <div class="field"><label>Activity</label><select id="p-type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${p.type === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+      <div class="field"><label>Activity</label><select id="p-type">${optHtml(p.type)}</select></div>
       <div class="field"><label>Topic (optional)</label><input type="text" id="p-topic" list="p-topics" value="${esc(p.topic)}" autocomplete="off">
         <datalist id="p-topics">${live(data.topics).map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>
       <div class="row">
@@ -962,11 +1165,12 @@
       const h1 = +m[1], m1 = +m[2], h2 = +m[3], m2 = +m[4];
       if (h1 > 23 || h2 > 23 || m1 > 59 || m2 > 59) { bad.push(line); return; }
       let rest = m[5].trim(), type = 'study', priority = 'medium';
+      const names = cats().map((x) => x.name).sort((x, y) => y.length - x.length).map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
       const pm = rest.match(/!(high|medium|low|h|m|l)\b/i);
       if (pm) { const k = pm[1].toLowerCase()[0]; priority = k === 'h' ? 'high' : k === 'l' ? 'low' : 'medium'; rest = rest.replace(pm[0], '').trim(); }
-      const tm = rest.match(/^(break|other|study)\s*[:\-]\s*/i);
-      if (tm) { type = tm[1].toLowerCase(); rest = rest.slice(tm[0].length).trim(); }
-      if (type === 'break' && !pm) priority = 'low';
+      const tm = names.length ? rest.match(new RegExp('^(' + names.join('|') + ')\\s*[:\\-]\\s*', 'i')) : null;
+      if (tm) { type = (cats().find((x) => x.name.toLowerCase() === tm[1].toLowerCase()) || { id: 'study' }).id; rest = rest.slice(tm[0].length).trim(); }
+      if ((kindOf(type) === 'break' || kindOf(type) === 'sleep') && !pm) priority = 'low';
       const start = `${pad(h1)}:${pad(m1)}`, end = `${pad(h2)}:${pad(m2)}`;
       if (start === end) { bad.push(line); return; }
       out.push({ id: uid(), start, end, topic: rest, type, priority, note: '' });
@@ -981,7 +1185,8 @@
     let pStudy = 0, pBreak = 0, doneStudy = 0;
     blocks.forEach((b) => {
       const d = blockDur(b) * 60;
-      if (b.type === 'study') { pStudy += d; doneStudy += Math.min(d, blockActual(date, b.id)); } else if (b.type === 'break') pBreak += d;
+      const bk = kindOf(b.type);
+      if (bk === 'study') { pStudy += d; doneStudy += Math.min(d, blockActual(date, b.id)); } else if (bk === 'break') pBreak += d;
     });
     const nDone = sts.filter((s) => s.key === 'done').length;
     const earlier = Object.keys(data.plans).some((k) => k < date && !data.plans[k].deleted);
@@ -1002,7 +1207,7 @@
             ${b.note ? `<div class="note" style="margin-top:4px">${esc(b.note)}</div>` : ''}
           </div>
           <div class="bact">
-            ${canStart ? `<button class="btn sm primary" data-action="tt-start" data-date="${date}" data-id="${b.id}" ${data.timer ? 'disabled title="A timer is already running"' : ''}>${st.act && st.key !== 'done' ? 'Resume' : 'Start'}</button>` : ''}
+            ${canStart ? `<button class="btn sm primary" data-action="tt-start" data-date="${date}" data-id="${b.id}">${st.act && st.key !== 'done' ? 'Resume' : 'Start'}</button>` : ''}
             <button class="btn sm" data-action="tt-edit" data-id="${b.id}">Edit</button>
             <button class="btn sm" data-action="tt-skip" data-id="${b.id}">${st.key === 'skipped' ? 'Unskip' : 'Skip'}</button>
           </div>
@@ -1039,7 +1244,7 @@
             <div class="row" style="margin-top:10px">
               <button class="btn primary" data-action="tt-quick-add">Add</button>
               <button class="btn" data-action="tt-add">Add with form</button>
-              <span class="note">Start a line with <b>break:</b> or <b>other:</b>; add <b>!high</b> or <b>!low</b> for importance.</span>
+              <span class="note">Start a line with a category name, like <b>break:</b> or <b>sleep:</b>; add <b>!high</b> or <b>!low</b> for importance.</span>
             </div>
           </div>
           <div class="card">
@@ -1097,8 +1302,8 @@
     for (let i = 0; i <= Math.ceil(total / 60); i++) hoursHtml += `<div class="tl-hour" style="top:${i * TL_H}px"><span>${fromMin(anchorMin() + i * 60)}</span></div>`;
     const blk = items.map(({ b, s, e, lane, n }) => {
       const st = blockStatus(date, b, plan);
-      return `<div class="tb st-${st.key} t-${b.type}" data-action="tt-edit" data-id="${b.id}" title="${esc(b.topic || defaultLabel(b.type))} · ${st.label}"
-        style="top:${s / 60 * TL_H}px;height:${Math.max(22, (e - s) / 60 * TL_H)}px;left:calc(${lane / n * 100}% + 2px);width:calc(${100 / n}% - 4px)">
+      return `<div class="tb st-${st.key}" data-action="tt-edit" data-id="${b.id}" title="${esc(b.topic || defaultLabel(b.type))} · ${st.label}"
+        style="--c:${cat(b.type).color};top:${s / 60 * TL_H}px;height:${Math.max(22, (e - s) / 60 * TL_H)}px;left:calc(${lane / n * 100}% + 2px);width:calc(${100 / n}% - 4px)">
         <b>${esc(b.topic || defaultLabel(b.type))}</b><span>${b.start}–${b.end}</span><div class="tb-rs"></div></div>`;
     }).join('');
     let now = '';
@@ -1165,7 +1370,7 @@
         <input type="text" id="b-topic" list="b-topics" value="${esc(b.topic)}" placeholder="e.g. Ratio v5, Workout, Dinner" autocomplete="off">
         <datalist id="b-topics">${live(data.topics).map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>
       <div class="row">
-        <div class="field grow"><label>Type</label><select id="b-type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${b.type === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+        <div class="field grow"><label>Type</label><select id="b-type">${optHtml(b.type)}</select></div>
         <div class="field grow"><label>Importance</label><select id="b-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${b.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
       </div>
       <div class="row">
@@ -1206,7 +1411,8 @@
   function offerBlockMatch(rec) {
     const end = rec.start + rec.seconds * 1000;
     let best = null;
-    [addDays(rec.date, -1), rec.date].forEach((pd) => {
+    const sd = ymd(new Date(rec.start));
+    [addDays(sd, -1), sd].forEach((pd) => {
       const plan = resolvePlan(pd);
       plan.blocks.forEach((b) => {
         if (b.type !== rec.type || plan.skipped.includes(b.id)) return;
@@ -1237,10 +1443,9 @@
 
   function startFromBlock(date, id) {
     const b = resolvePlan(date).blocks.find((x) => x.id === id); if (!b) return;
-    if (data.timer) { toast('A timer is already running'); return; }
     const rem = blockDur(b) * 60 - blockActual(date, id);
     const minutes = rem <= 0 ? blockDur(b) : Math.max(1, Math.ceil(rem / 60));
-    startTimer({ type: b.type, topic: b.topic, priority: b.priority, mode: 'countdown', minutes, blockId: b.id, planDate: date });
+    requestStart({ type: b.type, topic: b.topic, priority: b.priority, mode: 'countdown', minutes, blockId: b.id, planDate: date });
   }
 
   // "Now / Up next" card on the Today page
@@ -1261,7 +1466,7 @@
         <div class="btime">${b.start} – ${b.end}<small>${fmtDur(dur)}</small></div>
         <div class="bmain"><div class="btopic">${typeDot(b.type)}${esc(b.topic || defaultLabel(b.type))}</div>
           <div class="bmeta">${prioPill(b.priority)} ${spill(it.st)}</div></div>
-        <div class="bact"><button class="btn sm primary" data-action="tt-start" data-date="${pd}" data-id="${b.id}" ${data.timer ? 'disabled title="A timer is already running"' : ''}>${it.st.act ? 'Resume' : 'Start'}</button></div>
+        <div class="bact"><button class="btn sm primary" data-action="tt-start" data-date="${pd}" data-id="${b.id}">${it.st.act ? 'Resume' : 'Start'}</button></div>
       </div></div>`;
   }
 
@@ -1272,7 +1477,7 @@
     for (let d = r.from; d <= last; d = addDays(d, 1)) {
       const plan = resolvePlan(d);
       plan.blocks.forEach((b) => {
-        if (b.type !== 'study' || plan.skipped.includes(b.id)) return;
+        if (kindOf(b.type) !== 'study' || plan.skipped.includes(b.id)) return;
         if (blockTimes(d, b).endMs > now) return;
         const dur = blockDur(b) * 60, act = blockActual(d, b.id);
         planned += dur; n++; done += Math.min(dur, act); if (act >= dur * 0.9) nDone++;
@@ -1382,7 +1587,7 @@
 
     'set-type': (el) => {
       ui.form.type = el.dataset.v;
-      if (ui.form.type === 'break') { ui.form.priority = 'low'; }
+      if (kindOf(ui.form.type) === 'break' || kindOf(ui.form.type) === 'sleep') { ui.form.priority = 'low'; }
       render();
     },
     'set-prio': (el) => { ui.form.priority = el.dataset.v; render(); },
@@ -1391,7 +1596,7 @@
     start: () => {
       const f = ui.form;
       if (f.mode === 'countdown' && !(f.minutes > 0)) { toast('Enter the countdown minutes'); return; }
-      startTimer(f);
+      requestStart(f);
     },
     pause: pauseTimer,
     resume: resumeTimer,
@@ -1428,15 +1633,30 @@
     },
     'preset-start': (el) => {
       const p = live(data.presets).find((x) => x.id === el.dataset.id);
-      if (!p || data.timer) return;
-      startTimer({ type: p.type, topic: p.topic, priority: p.priority, mode: p.minutes ? 'countdown' : 'stopwatch', minutes: p.minutes });
+      if (!p) return;
+      requestStart({ type: p.type, topic: p.topic, priority: p.priority, mode: p.minutes ? 'countdown' : 'stopwatch', minutes: p.minutes });
     },
 
+    // --- sleep, gaps, categories
+    'go-sleep': () => requestStart({ type: 'sleep', topic: '', priority: 'low', mode: 'stopwatch' }),
+    'sleep-log': () => sleepModal(),
+    'gap-break': (el) => {
+      const s = +el.dataset.s, e = +el.dataset.e;
+      data.sessions.push(touch({ id: uid(), date: ymd(new Date(s)), start: s, seconds: Math.round((e - s) / 1000), topic: 'Break', type: 'break', priority: 'low', comment: '' }));
+      persist(true); render(); toast('Counted as break');
+    },
+    'gap-label': (el) => { const s = +el.dataset.s, e = +el.dataset.e; entryModal(null, { start: s, seconds: Math.round((e - s) / 1000), type: 'break', priority: 'low' }); },
+    'cat-add': () => catModal(null),
+    'cat-edit': (el) => { const x = catRaw(el.dataset.id); if (x) catModal(x); },
+    'cat-del': (el) => {
+      const x = catRaw(el.dataset.id);
+      if (x && !LOCKED.includes(x.id) && confirm(`Delete category "${x.name}"? Entries already logged keep their time.`)) { x.deleted = true; touch(x); persist(true); render(); }
+    },
     // --- timer
     extend: () => {
       const t = data.timer; if (!t || t.mode !== 'countdown') return;
       t.targetSec = Math.max(t.targetSec, Math.ceil(elapsedMs(t) / 1000)) + 600; t.alerted = false;
-      persist(true); render(); toast('Added 10 minutes');
+      data.timerUpdatedAt = Date.now(); persist(true); render(); toast('Added 10 minutes');
     },
     // --- entry modal helpers
     'm-finished': () => {
@@ -1567,6 +1787,7 @@
   const binds = {
     'f-topic': (el) => { ui.form.topic = el.value; },
     'm-calc': () => updateEnd(),
+    'sl-calc': () => updateSleepSum(),
     'b-calc': () => updateBlockDur(),
     'jr-q': (el) => {
       ui.jr.q = el.value;
@@ -1575,7 +1796,7 @@
       if (cnt) cnt.textContent = v.count;
     },
     'f-minutes': (el) => { ui.form.minutes = parseInt(el.value, 10) || 0; },
-    'run-comment': (el) => { if (data.timer) { data.timer.comment = el.value; persist(); } },
+    'run-comment': (el) => { if (data.timer) { data.timer.comment = el.value; data.timerUpdatedAt = Date.now(); persist(); } },
     journal: (el) => {
       const d = ui.date;
       if (!el.value.trim() && !data.journal[d]) return;
@@ -1590,6 +1811,7 @@
       const hit = live(data.topics).find((x) => x.name.toLowerCase() === el.value.trim().toLowerCase());
       if (hit) { ui.form.priority = hit.priority; render(); }
     },
+    'gap-cap': (el) => { data.settings.gapCapMin = Math.min(720, Math.max(10, parseInt(el.value, 10) || 120)); touch(data.settings); persist(true); render(); toast('Updated'); },
     'tt-date': (el) => { if (el.value) { ui.tt.date = el.value; render(); } },
     'tt-anchor': (el) => { data.settings.dayStart = el.value || '05:00'; touch(data.settings); persist(true); render(); },
     'jr-month': (el) => { ui.jr.month = el.value; render(); },
