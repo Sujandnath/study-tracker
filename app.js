@@ -3,14 +3,15 @@
   /* =====================================================================
    *  Study Tracker – renderer
    *
-   *  Data model (identical on every device, so Windows and Android can
-   *  later be linked and merged):
+   *  Data model (identical on every device, so all copies can be merged):
    *    topics   [{id, name, type, priority, updatedAt, deleted}]
    *    presets  [{id, name, topic, type, priority, minutes, updatedAt, deleted}]
    *    sessions [{id, date:'YYYY-MM-DD', start:ms, seconds, topic, type,
    *               priority, comment, updatedAt, deleted}]
    *    journal  { 'YYYY-MM-DD': {text, updatedAt} }
-   *    settings {dailyGoalMin, updatedAt}
+   *    plans    { 'YYYY-MM-DD': {blocks:[{id,start,end,topic,type,priority,note}], skipped:[ids], updatedAt, deleted} }
+   *    templates[{id, name, blocks, updatedAt, deleted}]
+   *    settings {dailyGoalMin, dayStart, updatedAt}
    *  Every record has an id + updatedAt, and deletes are tombstones
    *  (deleted:true), so two copies can be merged safely.
    * ===================================================================== */
@@ -93,7 +94,9 @@
       ],
       sessions: [],
       journal: {},
-      settings: { dailyGoalMin: 240, updatedAt: t },
+      plans: {},
+      templates: [],
+      settings: { dailyGoalMin: 240, dayStart: '05:00', updatedAt: t },
       timer: null
     };
   }
@@ -102,9 +105,10 @@
     d = d && typeof d === 'object' ? d : base;
     d.version = 1;
     d.deviceId = d.deviceId || base.deviceId;
-    for (const k of ['topics', 'presets', 'sessions']) if (!Array.isArray(d[k])) d[k] = base[k];
+    for (const k of ['topics', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
+    if (!d.plans || typeof d.plans !== 'object' || Array.isArray(d.plans)) d.plans = {};
     if (!d.journal || typeof d.journal !== 'object') d.journal = {};
-    d.settings = Object.assign({ dailyGoalMin: 240, updatedAt: 0 }, d.settings || {});
+    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', updatedAt: 0 }, d.settings || {});
     if (!d.timer) d.timer = null;
     return d;
   }
@@ -131,6 +135,10 @@
     for (const [day, j] of Object.entries(inc.journal)) {
       if (!out.journal[day] || (j.updatedAt || 0) > (out.journal[day].updatedAt || 0)) out.journal[day] = j;
     }
+    for (const [day, p] of Object.entries(inc.plans)) {
+      if (!out.plans[day] || (p.updatedAt || 0) > (out.plans[day].updatedAt || 0)) out.plans[day] = p;
+    }
+    out.templates = mergeById(out.templates, inc.templates);
     if ((inc.settings.updatedAt || 0) > (out.settings.updatedAt || 0)) out.settings = inc.settings;
     return out;
   }
@@ -139,6 +147,8 @@
   const ui = {
     page: 'today',
     date: todayStr(),
+    tt: { date: null, view: 'list', scope: 'onward', scrollNow: false },
+    jr: { q: '', month: 'all' },
     form: { type: 'study', topic: '', priority: 'medium', mode: 'stopwatch', minutes: 25 },
     prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr() }
   };
@@ -189,7 +199,7 @@
     const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
     try { return JSON.parse(text); } catch { return null; }
   }
-  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, presets: d.presets, sessions: d.sessions, journal: d.journal, settings: d.settings });
+  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, presets: d.presets, sessions: d.sessions, journal: d.journal, plans: d.plans, templates: d.templates, settings: d.settings });
 
   async function runSync() {
     if (!sync.token) return;
@@ -294,7 +304,8 @@
     data.timer = {
       topic, type: spec.type, priority: spec.priority,
       mode: spec.mode, targetSec: spec.mode === 'countdown' ? Math.round(spec.minutes * 60) : 0,
-      accumulatedMs: 0, startedAt: Date.now(), startWall: Date.now(), comment: '', alerted: false
+      accumulatedMs: 0, startedAt: Date.now(), startWall: Date.now(), comment: '', alerted: false,
+      blockId: spec.blockId || null, planDate: spec.planDate || null
     };
     persist(true);
     ui.page = 'today'; ui.date = todayStr();
@@ -318,7 +329,8 @@
       const name = t.topic || defaultLabel(t.type);
       data.sessions.push(touch({
         id: uid(), date: ymd(new Date(t.startWall)), start: t.startWall, seconds: secs,
-        topic: name, type: t.type, priority: t.priority, comment: (t.comment || '').trim()
+        topic: name, type: t.type, priority: t.priority, comment: (t.comment || '').trim(),
+        ...(t.blockId ? { blockId: t.blockId, planDate: t.planDate } : {})
       }));
       ensureTopic(t.topic, t.type, t.priority);
       ui.date = ymd(new Date(t.startWall));
@@ -429,6 +441,7 @@
       <div class="grid">
         <div class="stack">
           <div class="card">${timerCard()}</div>
+          ${upNextCard()}
         </div>
         <div class="stack">
           <div class="card">
@@ -443,8 +456,9 @@
             </div>
           </div>
           <div class="card">
-            <h2>Journal <small>saved automatically</small></h2>
+            <h2>Journal <button class="linkbtn" data-action="nav" data-page="journal">All entries →</button></h2>
             <textarea data-bind="journal" placeholder="How did the day go? What clicked, what to revisit…">${esc(journal)}</textarea>
+            <p class="note" style="margin-top:8px">Saved automatically. Every day's entry is kept on the <b>Journal</b> page.</p>
           </div>
         </div>
       </div>
@@ -464,6 +478,7 @@
           <div class="badges">
             <span class="pill" style="background:#eff6ff;color:${TYPES[t.type].color}">${TYPES[t.type].label}</span>
             ${prioPill(t.priority)}
+            ${t.blockId ? '<span class="pill" style="background:#eff6ff;color:#1d4ed8">From timetable</span>' : ''}
           </div>
           <div class="clock ${t.startedAt ? '' : 'paused'}" id="clock">00:00:00</div>
           <div class="remain" id="remain"></div>
@@ -472,6 +487,7 @@
             ${t.startedAt
               ? '<button class="btn big" data-action="pause">Pause</button>'
               : '<button class="btn big primary" data-action="resume">Resume</button>'}
+            ${t.mode === 'countdown' ? '<button class="btn big" data-action="extend">+10 min</button>' : ''}
             <button class="btn big primary" data-action="stop">Stop &amp; save</button>
             <button class="btn big danger" data-action="discard">Discard</button>
           </div>
@@ -563,14 +579,20 @@
       <div class="field"><label>Importance</label>
         <select id="m-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${s.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
       <div class="row">
-        <div class="field grow"><label>Date</label><input type="date" id="m-date" value="${ymd(startD)}"></div>
-        <div class="field grow"><label>Start time</label><input type="time" id="m-time" value="${pad(startD.getHours())}:${pad(startD.getMinutes())}"></div>
+        <div class="field grow"><label>Date</label><input type="date" id="m-date" data-bind="m-calc" value="${ymd(startD)}"></div>
+        <div class="field grow"><label>Start time</label><input type="time" id="m-time" data-bind="m-calc" value="${pad(startD.getHours())}:${pad(startD.getMinutes())}"></div>
       </div>
       <div class="row">
-        <div class="field grow"><label>Hours</label><input type="number" id="m-h" min="0" max="23" value="${Math.floor(s.seconds / 3600)}"></div>
-        <div class="field grow"><label>Minutes</label><input type="number" id="m-min" min="0" max="59" value="${Math.floor(s.seconds % 3600 / 60)}"></div>
+        <div class="field grow"><label>Hours</label><input type="number" id="m-h" data-bind="m-calc" min="0" max="23" value="${Math.floor(s.seconds / 3600)}"></div>
+        <div class="field grow"><label>Minutes</label><input type="number" id="m-min" data-bind="m-calc" min="0" max="59" value="${Math.floor(s.seconds % 3600 / 60)}"></div>
       </div>
+      <div class="row tight" style="margin:-4px 0 6px">
+        <button class="btn sm" type="button" data-action="m-finished" title="Sets the start time to the current time minus the duration above">Set start = now − duration</button>
+        <button class="btn sm" type="button" data-action="m-startnow">Set start = now</button>
+      </div>
+      <div class="note" id="m-end" style="margin-bottom:14px"></div>
       <div class="field"><label>Comment</label><input type="text" id="m-comment" value="${esc(s.comment)}" placeholder="Optional"></div>
+      ${existing && existing.blockId ? linkNote(existing) : ''}
       ${existing ? `<button class="btn danger sm" data-action="entry-del-modal" data-id="${existing.id}">Delete this entry</button>` : ''}`;
     openModal(existing ? 'Edit entry' : 'Add entry', body, () => {
       const type = $('#m-type').value;
@@ -584,11 +606,12 @@
       const rec = existing || { id: uid() };
       Object.assign(rec, { date, start: day.getTime(), seconds: secs, topic, type, priority: prio, comment: $('#m-comment').value.trim() });
       touch(rec);
-      if (!existing) data.sessions.push(rec);
+      if (!existing) { data.sessions.push(rec); offerBlockMatch(rec); }
       if ($('#m-topic').value.trim()) ensureTopic($('#m-topic').value, type, prio);
       ui.date = date;
       persist(true); render();
     });
+    updateEnd();
   }
 
   // =====================================================================
@@ -650,6 +673,7 @@
           <div class="tile"><div class="k">Active days</div><div class="v">${activeDays}<span style="font-size:14px;color:var(--muted)"> / ${nDays}</span></div><div class="s">days with study</div></div>
           <div class="tile"><div class="k">Best day</div><div class="v">${best && best.sec ? short(best.sec) : '–'}</div><div class="s">${best && best.sec ? fmtShort(best.d) : 'no data yet'}</div></div>
           <div class="tile"><div class="k">Breaks</div><div class="v">${short(tot.break)}</div><div class="s">${tot.study ? Math.round(tot.break / tot.study * 100) + '% of study' : '–'}</div></div>
+          ${adhTile(r)}
           <div class="tile"><div class="k">Streak</div><div class="v">${streak()}<span style="font-size:14px;color:var(--muted)"> ${streak() === 1 ? 'day' : 'days'}</span></div><div class="s">current</div></div>
         </div>
 
@@ -861,14 +885,482 @@
   }
 
   // =====================================================================
+  //  TIMETABLE
+  //  A plan is a list of blocks. Each day can have its own plan; a day with
+  //  no plan of its own repeats the most recent earlier plan. The "day"
+  //  starts at settings.dayStart (default 05:00), so late-night blocks such
+  //  as 00:20–01:20 belong to the evening before.
+  // =====================================================================
+  const toMin = (t) => { const [h, m] = String(t || '0:0').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+  const fromMin = (n) => { n = ((Math.round(n) % 1440) + 1440) % 1440; return `${pad(Math.floor(n / 60))}:${pad(n % 60)}`; };
+  const anchorMin = () => toMin((data.settings && data.settings.dayStart) || '05:00');
+  const offMin = (t) => (toMin(t) - anchorMin() + 1440) % 1440;
+  const blockDur = (b) => (toMin(b.end) - toMin(b.start) + 1440) % 1440;
+  const fmtDur = (m) => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ' ' + pad(m % 60) + 'm' : ''}` : `${m}m`);
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+  function anchorMs(date) { const d = parseYmd(date); const m = anchorMin(); d.setHours(Math.floor(m / 60), m % 60, 0, 0); return d.getTime(); }
+  function blockTimes(date, b) { const s = anchorMs(date) + offMin(b.start) * 60000; return { startMs: s, endMs: s + blockDur(b) * 60000 }; }
+  const sortBlocks = (arr) => [...arr].sort((x, y) => offMin(x.start) - offMin(y.start) || blockDur(y) - blockDur(x));
+  function activePlanDate() { const t = todayStr(); return Date.now() < anchorMs(t) ? addDays(t, -1) : t; }
+  const ttDate = () => ui.tt.date || (ui.tt.date = activePlanDate());
+
+  const ownPlan = (date) => { const p = data.plans[date]; return p && !p.deleted ? p : null; };
+  function resolvePlan(date) {
+    const own = ownPlan(date);
+    if (own) return { blocks: own.blocks || [], skipped: own.skipped || [], own: true, from: date };
+    let best = null;
+    for (const k of Object.keys(data.plans)) {
+      const p = data.plans[k];
+      if (!p || p.deleted || k >= date) continue;
+      if (!best || k > best) best = k;
+    }
+    if (best) return { blocks: data.plans[best].blocks || [], skipped: [], own: false, from: best };
+    return { blocks: [], skipped: [], own: false, from: null };
+  }
+  // Apply a change to a day's plan. Scope 'onward' (default): following days
+  // keep repeating this plan. Scope 'day': tomorrow is pinned to the old plan.
+  function savePlan(date, mutate) {
+    const cur = resolvePlan(date);
+    const next = { blocks: clone(cur.blocks), skipped: [...cur.skipped] };
+    mutate(next);
+    if (ui.tt.scope === 'day') {
+      const nd = addDays(date, 1);
+      if (!ownPlan(nd)) data.plans[nd] = { blocks: clone(cur.blocks), skipped: [], updatedAt: Date.now() };
+    }
+    data.plans[date] = { blocks: next.blocks, skipped: next.skipped.filter((id) => next.blocks.some((b) => b.id === id)), updatedAt: Date.now() };
+    persist(true); render();
+  }
+
+  function blockActual(date, id) {
+    return live(data.sessions).filter((s) => s.planDate === date && s.blockId === id).reduce((n, s) => n + s.seconds, 0);
+  }
+  function blockStatus(date, b, plan) {
+    const dur = blockDur(b) * 60, act = blockActual(date, b.id), { startMs, endMs } = blockTimes(date, b), now = Date.now();
+    if (plan.skipped.includes(b.id)) return { key: 'skipped', label: 'Skipped', act };
+    if (data.timer && data.timer.blockId === b.id && data.timer.planDate === date) return { key: 'now', label: 'In progress', act };
+    if (act >= dur * 0.9) return { key: 'done', label: 'Done', act };
+    if (act > 0) return { key: 'partial', label: 'Partial', act };
+    if (now > endMs) return { key: 'missed', label: 'Missed', act };
+    if (now >= startMs) return { key: 'now', label: 'Now', act };
+    return { key: 'upcoming', label: 'Upcoming', act };
+  }
+  const spill = (st) => `<span class="spill s-${st.key}">${st.label}</span>`;
+  function coveredMin(blocks) {
+    const iv = blocks.map((b) => [offMin(b.start), Math.min(1440, offMin(b.start) + blockDur(b))]).sort((x, y) => x[0] - y[0]);
+    let tot = 0, cs = -1, ce = -1;
+    iv.forEach(([s, e]) => { if (s > ce) { if (ce > cs) tot += ce - cs; cs = s; ce = e; } else ce = Math.max(ce, e); });
+    if (ce > cs) tot += ce - cs;
+    return tot;
+  }
+
+  // "14:00 to 15:00 Ratio v5", "22:00-23:00 break: Dinner !low" (one per line)
+  function parseQuickLines(text) {
+    const out = [], bad = [];
+    String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).forEach((line) => {
+      const m = line.match(/^(\d{1,2})[:.](\d{2})\s*(?:to|till|until|-|–|—)\s*(\d{1,2})[:.](\d{2})\s*(.*)$/i);
+      if (!m) { bad.push(line); return; }
+      const h1 = +m[1], m1 = +m[2], h2 = +m[3], m2 = +m[4];
+      if (h1 > 23 || h2 > 23 || m1 > 59 || m2 > 59) { bad.push(line); return; }
+      let rest = m[5].trim(), type = 'study', priority = 'medium';
+      const pm = rest.match(/!(high|medium|low|h|m|l)\b/i);
+      if (pm) { const k = pm[1].toLowerCase()[0]; priority = k === 'h' ? 'high' : k === 'l' ? 'low' : 'medium'; rest = rest.replace(pm[0], '').trim(); }
+      const tm = rest.match(/^(break|other|study)\s*[:\-]\s*/i);
+      if (tm) { type = tm[1].toLowerCase(); rest = rest.slice(tm[0].length).trim(); }
+      if (type === 'break' && !pm) priority = 'low';
+      const start = `${pad(h1)}:${pad(m1)}`, end = `${pad(h2)}:${pad(m2)}`;
+      if (start === end) { bad.push(line); return; }
+      out.push({ id: uid(), start, end, topic: rest, type, priority, note: '' });
+    });
+    return { out, bad };
+  }
+
+  function pageTimetable() {
+    const date = ttDate(), plan = resolvePlan(date), blocks = sortBlocks(plan.blocks);
+    const active = date === activePlanDate();
+    const sts = blocks.map((b) => blockStatus(date, b, plan));
+    let pStudy = 0, pBreak = 0, doneStudy = 0;
+    blocks.forEach((b) => {
+      const d = blockDur(b) * 60;
+      if (b.type === 'study') { pStudy += d; doneStudy += Math.min(d, blockActual(date, b.id)); } else if (b.type === 'break') pBreak += d;
+    });
+    const nDone = sts.filter((s) => s.key === 'done').length;
+    const earlier = Object.keys(data.plans).some((k) => k < date && !data.plans[k].deleted);
+    const note = plan.own
+      ? `Custom plan for this day.${earlier ? ' <button class="linkbtn" data-action="tt-reset">Go back to the previous plan</button>' : ''}`
+      : plan.from ? `Repeating the plan from <b>${fmtShort(plan.from)}</b>. Change anything below to customise this day.` : 'No plan yet. Add your first block below.';
+    const templates = live(data.templates);
+    const v = ui.tt.view;
+
+    const rows = blocks.map((b, i) => {
+      const st = sts[i], dur = blockDur(b), canStart = active && st.key !== 'skipped';
+      return `
+        <div class="blk st-${st.key}">
+          <div class="btime">${b.start} – ${b.end}<small>${fmtDur(dur)}</small></div>
+          <div class="bmain">
+            <div class="btopic">${typeDot(b.type)}${esc(b.topic || defaultLabel(b.type))}</div>
+            <div class="bmeta">${prioPill(b.priority)} ${spill(st)} <span>Planned ${fmtDur(dur)}${st.act ? ' · Did ' + short(st.act) : ''}</span></div>
+            ${b.note ? `<div class="note" style="margin-top:4px">${esc(b.note)}</div>` : ''}
+          </div>
+          <div class="bact">
+            ${canStart ? `<button class="btn sm primary" data-action="tt-start" data-date="${date}" data-id="${b.id}" ${data.timer ? 'disabled title="A timer is already running"' : ''}>${st.act && st.key !== 'done' ? 'Resume' : 'Start'}</button>` : ''}
+            <button class="btn sm" data-action="tt-edit" data-id="${b.id}">Edit</button>
+            <button class="btn sm" data-action="tt-skip" data-id="${b.id}">${st.key === 'skipped' ? 'Unskip' : 'Skip'}</button>
+          </div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="page-head">
+        <div><h1>Timetable${active ? '<span class="today-pill">TODAY</span>' : ''}</h1><p class="sub">${fmtDow(date)}, ${fmtLong(date)}</p></div>
+        <div class="datenav">
+          <button class="btn icon" data-action="tt-prev" aria-label="Previous day">${chev('left')}</button>
+          <input type="date" data-change="tt-date" value="${date}">
+          <button class="btn icon" data-action="tt-next" aria-label="Next day">${chev('right')}</button>
+          ${active ? '' : '<button class="btn" data-action="tt-today">Today</button>'}
+        </div>
+      </div>
+      <p class="note tt-note">${note}</p>
+      <div class="controls">
+        <div class="seg">
+          <button class="${v === 'list' ? 'on' : ''}" data-action="tt-view" data-v="list">List</button>
+          <button class="${v === 'timeline' ? 'on' : ''}" data-action="tt-view" data-v="timeline">Timeline</button>
+        </div>
+        <div class="seg" title="Choose whether your edits also change the days after this one">
+          <button class="${ui.tt.scope === 'onward' ? 'on' : ''}" data-action="tt-scope" data-v="onward">Edit this day &amp; after</button>
+          <button class="${ui.tt.scope === 'day' ? 'on' : ''}" data-action="tt-scope" data-v="day">This day only</button>
+        </div>
+        <label class="inline-lbl">Day starts <input type="time" data-change="tt-anchor" value="${data.settings.dayStart || '05:00'}" style="width:auto"></label>
+      </div>
+      <div class="grid">
+        <div class="stack">
+          <div class="card">
+            <h2>Add blocks <small>one per line</small></h2>
+            <textarea id="tt-quick" class="tt-quick" placeholder="14:00 to 15:00 Ratio v5&#10;22:00-23:00 break: Dinner !low"></textarea>
+            <div class="row" style="margin-top:10px">
+              <button class="btn primary" data-action="tt-quick-add">Add</button>
+              <button class="btn" data-action="tt-add">Add with form</button>
+              <span class="note">Start a line with <b>break:</b> or <b>other:</b>; add <b>!high</b> or <b>!low</b> for importance.</span>
+            </div>
+          </div>
+          <div class="card">
+            <h2>${v === 'list' ? 'Plan' : 'Day timeline'} <small>${blocks.length} ${blocks.length === 1 ? 'block' : 'blocks'}</small></h2>
+            ${!blocks.length ? '<div class="empty"><b>No blocks yet</b>Type lines like <i>14:00 to 15:00 Ratio v5</i> above.</div>' : v === 'list' ? rows : timelineHtml(date, blocks, plan)}
+          </div>
+        </div>
+        <div class="stack">
+          <div class="card">
+            <h2>Day summary</h2>
+            <div class="tiles">
+              <div class="tile"><div class="k">${typeDot('study')}Study</div><div class="v">${short(pStudy)}</div></div>
+              <div class="tile"><div class="k">${typeDot('break')}Breaks</div><div class="v">${short(pBreak)}</div></div>
+              <div class="tile"><div class="k">Unplanned</div><div class="v">${fmtDur(1440 - coveredMin(blocks))}</div></div>
+            </div>
+            <div class="goal">
+              <div class="gl"><span>Planned study completed</span><span>${short(doneStudy)} / ${short(pStudy)}</span></div>
+              <div class="bar"><i style="width:${pStudy ? Math.min(100, doneStudy / pStudy * 100) : 0}%"></i></div>
+            </div>
+            <p class="note" style="margin-top:10px">${nDone} of ${blocks.length} ${blocks.length === 1 ? 'block' : 'blocks'} done</p>
+          </div>
+          <div class="card">
+            <h2>Templates &amp; copy</h2>
+            <div class="field"><label>Save this day's plan as a template</label>
+              <div class="row tight"><input type="text" id="tpl-name" class="grow" placeholder="e.g. Weekday, Sunday"><button class="btn sm primary" data-action="tpl-save">Save</button></div></div>
+            ${templates.length ? templates.map((t) => `
+              <div class="list-row">
+                <div class="grow"><div class="nm">${esc(t.name)}</div><div class="meta">${t.blocks.length} blocks</div></div>
+                <button class="btn sm" data-action="tpl-apply" data-id="${t.id}">Apply</button>
+                <button class="btn sm danger" data-action="tpl-del" data-id="${t.id}">Delete</button>
+              </div>`).join('') : '<p class="note" style="margin-bottom:12px">No templates yet.</p>'}
+            <div class="field" style="margin-top:14px"><label>Copy the plan from another day</label>
+              <div class="row tight"><input type="date" id="copy-from" class="grow" value="${addDays(date, -1)}"><button class="btn sm" data-action="tt-copy">Copy</button></div></div>
+            <button class="btn sm danger" data-action="tt-clear">Clear this day's plan</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  const TL_H = 56; // pixels per hour on the timeline
+  function timelineHtml(date, blocks, plan) {
+    const MIN_VIS = Math.ceil(24 / TL_H * 60); // shortest drawn block (~24 min tall) so labels stay readable
+    const items = blocks.map((b) => { const s = offMin(b.start), e = s + blockDur(b); return { b, s, e, ev: Math.max(e, s + MIN_VIS) }; }).sort((x, y) => x.s - y.s || y.e - x.e);
+    const total = Math.max(1440, ...items.map((i) => i.e));
+    let cluster = [], cEnd = -1, laneEnds = [];
+    const flush = () => { const n = Math.max(1, ...cluster.map((i) => i.lane + 1)); cluster.forEach((i) => { i.n = n; }); cluster = []; };
+    items.forEach((it) => {
+      if (it.s >= cEnd) { flush(); laneEnds = []; cEnd = it.ev; } else cEnd = Math.max(cEnd, it.ev);
+      let l = laneEnds.findIndex((e) => e <= it.s);
+      if (l < 0) { l = laneEnds.length; laneEnds.push(it.ev); } else laneEnds[l] = it.ev;
+      it.lane = l; cluster.push(it);
+    });
+    flush();
+    let hoursHtml = '';
+    for (let i = 0; i <= Math.ceil(total / 60); i++) hoursHtml += `<div class="tl-hour" style="top:${i * TL_H}px"><span>${fromMin(anchorMin() + i * 60)}</span></div>`;
+    const blk = items.map(({ b, s, e, lane, n }) => {
+      const st = blockStatus(date, b, plan);
+      return `<div class="tb st-${st.key} t-${b.type}" data-action="tt-edit" data-id="${b.id}" title="${esc(b.topic || defaultLabel(b.type))} · ${st.label}"
+        style="top:${s / 60 * TL_H}px;height:${Math.max(22, (e - s) / 60 * TL_H)}px;left:calc(${lane / n * 100}% + 2px);width:calc(${100 / n}% - 4px)">
+        <b>${esc(b.topic || defaultLabel(b.type))}</b><span>${b.start}–${b.end}</span><div class="tb-rs"></div></div>`;
+    }).join('');
+    let now = '';
+    if (date === activePlanDate()) {
+      const m = (Date.now() - anchorMs(date)) / 60000;
+      if (m >= 0 && m <= total) now = `<div class="tl-now" style="top:${m / 60 * TL_H}px"></div>`;
+    }
+    return `<p class="note" style="margin-bottom:10px">Drag a block to move it, drag its bottom edge to resize, or tap it to edit.</p>
+      <div class="tl" style="height:${total / 60 * TL_H}px">${hoursHtml}<div class="tl-lane">${blk}${now}</div></div>`;
+  }
+
+  // drag to move / resize on the timeline (mouse & pen; touch can resize, tap to edit)
+  let drag = null, justDragged = false;
+  document.addEventListener('pointerdown', (e) => {
+    if (ui.page !== 'timetable') return;
+    const tb = e.target.closest('.tb'); if (!tb) return;
+    const rs = !!e.target.closest('.tb-rs');
+    if (!rs && e.pointerType === 'touch') return;
+    const date = ttDate(), b = resolvePlan(date).blocks.find((x) => x.id === tb.dataset.id); if (!b) return;
+    drag = { id: b.id, date, rs, y0: e.clientY, s0: offMin(b.start), d0: blockDur(b), el: tb, moved: false, ns: offMin(b.start), nd: blockDur(b) };
+    try { tb.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    e.preventDefault();
+  });
+  document.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dy = e.clientY - drag.y0;
+    if (Math.abs(dy) > 3) drag.moved = true;
+    if (!drag.moved) return;
+    const mins = Math.round(dy / TL_H * 60 / 5) * 5;
+    if (drag.rs) { drag.nd = Math.min(1440, Math.max(5, drag.d0 + mins)); drag.ns = drag.s0; drag.el.style.height = Math.max(22, drag.nd / 60 * TL_H) + 'px'; }
+    else { drag.ns = Math.min(1435, Math.max(0, drag.s0 + mins)); drag.nd = drag.d0; drag.el.style.top = drag.ns / 60 * TL_H + 'px'; }
+    const lab = drag.el.querySelector('span');
+    if (lab) lab.textContent = `${fromMin(anchorMin() + drag.ns)}–${fromMin(anchorMin() + drag.ns + drag.nd)}`;
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    if (!d.moved) return;
+    justDragged = true; setTimeout(() => { justDragged = false; }, 120);
+    savePlan(d.date, (next) => {
+      const b = next.blocks.find((x) => x.id === d.id);
+      if (b) { b.start = fromMin(anchorMin() + d.ns); b.end = fromMin(anchorMin() + d.ns + d.nd); }
+    });
+  };
+  document.addEventListener('pointerup', endDrag);
+  document.addEventListener('pointercancel', endDrag);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && e.target.id === 'tt-quick') { e.preventDefault(); actions['tt-quick-add'](); }
+  });
+  // keep statuses ("Upcoming" -> "Now" -> "Missed") fresh while the page is open
+  setInterval(() => {
+    if (ui.page !== 'timetable' || drag || document.hidden) return;
+    const ae = (document.activeElement || {}).tagName || '';
+    if (/INPUT|TEXTAREA|SELECT/.test(ae) || $('#modal-root').innerHTML) return;
+    render();
+  }, 30000);
+
+  function blockModal(date, existing) {
+    const now = new Date(), r5 = Math.ceil((now.getHours() * 60 + now.getMinutes()) / 5) * 5;
+    const b = existing || { start: date === activePlanDate() ? fromMin(r5) : fromMin(anchorMin()), end: '', topic: '', type: 'study', priority: 'medium', note: '' };
+    if (!b.end) b.end = fromMin(toMin(b.start) + 60);
+    openModal(existing ? 'Edit block' : 'Add block', `
+      <div class="field"><label>Topic / activity</label>
+        <input type="text" id="b-topic" list="b-topics" value="${esc(b.topic)}" placeholder="e.g. Ratio v5, Workout, Dinner" autocomplete="off">
+        <datalist id="b-topics">${live(data.topics).map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>
+      <div class="row">
+        <div class="field grow"><label>Type</label><select id="b-type">${Object.entries(TYPES).map(([k, v]) => `<option value="${k}" ${b.type === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+        <div class="field grow"><label>Importance</label><select id="b-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${b.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+      </div>
+      <div class="row">
+        <div class="field grow"><label>From</label><input type="time" id="b-start" data-bind="b-calc" value="${b.start}"></div>
+        <div class="field grow"><label>To</label><input type="time" id="b-end" data-bind="b-calc" value="${b.end}"></div>
+      </div>
+      <div class="note" id="b-dur" style="margin:-6px 0 14px"></div>
+      <div class="field"><label>Note (optional)</label><input type="text" id="b-note" value="${esc(b.note || '')}"></div>
+      ${existing ? `<button class="btn danger sm" data-action="tt-del-modal" data-id="${existing.id}">Delete this block</button>` : ''}`,
+    () => {
+      const start = $('#b-start').value, end = $('#b-end').value;
+      if (!start || !end) { toast('Set both times'); return false; }
+      if (start === end) { toast('Start and end cannot be the same'); return false; }
+      const rec = { id: existing ? existing.id : uid(), start, end, topic: $('#b-topic').value.trim(), type: $('#b-type').value, priority: $('#b-prio').value, note: $('#b-note').value.trim() };
+      if (rec.topic) ensureTopic(rec.topic, rec.type, rec.priority);
+      savePlan(date, (next) => {
+        const i = existing ? next.blocks.findIndex((x) => x.id === existing.id) : -1;
+        if (i >= 0) next.blocks[i] = rec; else next.blocks.push(rec);
+      });
+    });
+    updateBlockDur();
+  }
+  function updateBlockDur() {
+    const el = $('#b-dur'); if (!el) return;
+    const s = $('#b-start').value, e = $('#b-end').value;
+    if (!s || !e || s === e) { el.textContent = ''; return; }
+    const d = blockDur({ start: s, end: e });
+    el.textContent = `Duration ${fmtDur(d)}${toMin(e) < toMin(s) ? ' (ends after midnight)' : ''}`;
+  }
+
+  // ---------- link between activity-log entries and timetable blocks ----------
+  function linkNote(s) {
+    const b = resolvePlan(s.planDate).blocks.find((x) => x.id === s.blockId);
+    const label = b ? `${b.start}–${b.end} ${esc(b.topic || defaultLabel(b.type))}` : 'a block that is no longer in the plan';
+    return `<div class="note" style="margin-bottom:10px">Counts towards timetable block: <b>${label}</b> <button class="linkbtn" data-action="entry-unlink" data-id="${s.id}">Unlink</button></div>`;
+  }
+  // after adding an entry by hand: if it overlaps a planned block, ask before linking
+  function offerBlockMatch(rec) {
+    const end = rec.start + rec.seconds * 1000;
+    let best = null;
+    [addDays(rec.date, -1), rec.date].forEach((pd) => {
+      const plan = resolvePlan(pd);
+      plan.blocks.forEach((b) => {
+        if (b.type !== rec.type || plan.skipped.includes(b.id)) return;
+        if (blockActual(pd, b.id) >= blockDur(b) * 60 * 0.9) return;
+        const { startMs, endMs } = blockTimes(pd, b);
+        const ov = Math.min(end, endMs) - Math.max(rec.start, startMs);
+        if (ov <= 0) return;
+        if (Math.max(ov / (rec.seconds * 1000), ov / (endMs - startMs)) >= 0.5 && (!best || ov > best.ov)) best = { pd, b, ov };
+      });
+    });
+    if (!best) return;
+    const label = `${best.b.start}–${best.b.end} ${best.b.topic || defaultLabel(best.b.type)}`;
+    if (confirm(`This entry overlaps your planned block "${label}".\n\nCount it towards that block?`)) { rec.blockId = best.b.id; rec.planDate = best.pd; touch(rec); }
+  }
+  function updateEnd() {
+    const el = $('#m-end'); if (!el) return;
+    const d = $('#m-date').value, t = $('#m-time').value;
+    const secs = (parseInt($('#m-h').value, 10) || 0) * 3600 + (parseInt($('#m-min').value, 10) || 0) * 60;
+    if (!d || !t || secs <= 0) { el.textContent = ''; return; }
+    const [hh, mm] = t.split(':').map(Number), s = parseYmd(d); s.setHours(hh, mm, 0, 0);
+    el.textContent = `Runs ${fmtTime(s.getTime())} → ${fmtTime(s.getTime() + secs * 1000)}`;
+  }
+  function setStartFields(ms) {
+    const d = new Date(Math.round(ms / 60000) * 60000);
+    $('#m-date').value = ymd(d); $('#m-time').value = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    updateEnd();
+  }
+
+  function startFromBlock(date, id) {
+    const b = resolvePlan(date).blocks.find((x) => x.id === id); if (!b) return;
+    if (data.timer) { toast('A timer is already running'); return; }
+    const rem = blockDur(b) * 60 - blockActual(date, id);
+    const minutes = rem <= 0 ? blockDur(b) : Math.max(1, Math.ceil(rem / 60));
+    startTimer({ type: b.type, topic: b.topic, priority: b.priority, mode: 'countdown', minutes, blockId: b.id, planDate: date });
+  }
+
+  // "Now / Up next" card on the Today page
+  function upNextCard() {
+    if (ui.date !== todayStr()) return '';
+    const pd = activePlanDate(), plan = resolvePlan(pd);
+    if (!plan.blocks.length) return '';
+    const now = Date.now();
+    const list = sortBlocks(plan.blocks).map((b) => ({ b, ...blockTimes(pd, b), st: blockStatus(pd, b, plan) }));
+    const cur = list.find((x) => x.startMs <= now && now < x.endMs && !['done', 'skipped'].includes(x.st.key));
+    const nxt = list.find((x) => x.startMs > now && x.st.key !== 'skipped');
+    const it = cur || nxt;
+    const head = `<h2>${it ? (cur ? 'Now in your timetable' : 'Up next') : 'Timetable'} <button class="linkbtn" data-action="nav" data-page="timetable">Open timetable →</button></h2>`;
+    if (!it) return `<div class="card">${head}<p class="note">Every planned block for today is finished or skipped.</p></div>`;
+    const b = it.b, dur = blockDur(b);
+    return `<div class="card">${head}
+      <div class="blk" style="padding:0">
+        <div class="btime">${b.start} – ${b.end}<small>${fmtDur(dur)}</small></div>
+        <div class="bmain"><div class="btopic">${typeDot(b.type)}${esc(b.topic || defaultLabel(b.type))}</div>
+          <div class="bmeta">${prioPill(b.priority)} ${spill(it.st)}</div></div>
+        <div class="bact"><button class="btn sm primary" data-action="tt-start" data-date="${pd}" data-id="${b.id}" ${data.timer ? 'disabled title="A timer is already running"' : ''}>${it.st.act ? 'Resume' : 'Start'}</button></div>
+      </div></div>`;
+  }
+
+  // Progress page: how much of the planned study time was actually done
+  function adhTile(r) {
+    const today = todayStr(), now = Date.now(), last = r.to < today ? r.to : today;
+    let planned = 0, done = 0, n = 0, nDone = 0;
+    for (let d = r.from; d <= last; d = addDays(d, 1)) {
+      const plan = resolvePlan(d);
+      plan.blocks.forEach((b) => {
+        if (b.type !== 'study' || plan.skipped.includes(b.id)) return;
+        if (blockTimes(d, b).endMs > now) return;
+        const dur = blockDur(b) * 60, act = blockActual(d, b.id);
+        planned += dur; n++; done += Math.min(dur, act); if (act >= dur * 0.9) nDone++;
+      });
+    }
+    const pct = planned ? Math.round(done / planned * 100) : null;
+    return `<div class="tile"><div class="k">Plan adherence</div><div class="v">${pct === null ? '–' : pct + '%'}</div><div class="s">${pct === null ? 'no planned study yet' : nDone + ' of ' + n + ' study blocks'}</div></div>`;
+  }
+
+  // =====================================================================
+  //  JOURNAL PAGE
+  // =====================================================================
+  const monthLabel = (m) => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }); };
+  function hl(text, q) {
+    if (!q) return esc(text);
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    let out = '', last = 0, m;
+    while ((m = re.exec(text))) {
+      if (m[0] === '') { re.lastIndex++; continue; }
+      out += esc(text.slice(last, m.index)) + '<mark>' + esc(m[0]) + '</mark>';
+      last = m.index + m[0].length;
+    }
+    return out + esc(text.slice(last));
+  }
+  const journalAll = () => Object.entries(data.journal).filter(([, j]) => j && String(j.text || '').trim()).map(([d, j]) => ({ d, text: j.text })).sort((x, y) => (x.d < y.d ? 1 : -1));
+  function journalView() {
+    const q = ui.jr.q.trim(), ql = q.toLowerCase(), all = journalAll();
+    const list = all.filter((e) => (ui.jr.month === 'all' || e.d.startsWith(ui.jr.month)) && (!q || e.text.toLowerCase().includes(ql) || fmtLong(e.d).toLowerCase().includes(ql)));
+    const words = list.reduce((n, e) => n + (e.text.trim().match(/\S+/g) || []).length, 0);
+    const count = `${list.length} ${list.length === 1 ? 'entry' : 'entries'}${q || ui.jr.month !== 'all' ? ' found' : ''} · ${words} words`;
+    const html = list.length ? list.map((e) => {
+      const study = totals(sessionsOn(e.d)).study, long = e.text.length > 320 || e.text.split('\n').length > 6;
+      return `<div class="card jr-entry">
+        <div class="jr-head">
+          <div><div class="jr-date">${fmtDow(e.d)}, ${fmtLong(e.d)}</div><div class="note">${study ? 'Studied ' + short(study) : 'No study logged'}</div></div>
+          <div class="row tight"><button class="btn sm" data-action="jr-open" data-date="${e.d}">Open day</button><button class="btn sm" data-action="jr-edit" data-date="${e.d}">Edit</button></div>
+        </div>
+        <div class="jr-text ${long ? 'clamp' : ''}">${hl(e.text, q)}</div>
+        ${long ? '<button class="linkbtn" data-action="jr-more">Read more</button>' : ''}
+      </div>`;
+    }).join('') : `<div class="card"><div class="empty"><b>${all.length ? 'No entries match' : 'No journal entries yet'}</b>${all.length ? 'Try a different word or month.' : 'Write in the Journal box on the Today page, or press New entry.'}</div></div>`;
+    return { html, count };
+  }
+  function pageJournal() {
+    const months = [...new Set(journalAll().map((e) => e.d.slice(0, 7)))];
+    const v = journalView();
+    return `
+      <div class="page-head">
+        <div><h1>Journal</h1><p class="sub" id="jr-count">${v.count}</p></div>
+        <button class="btn primary" data-action="jr-new">+ New entry</button>
+      </div>
+      <div class="controls">
+        <input type="text" id="jr-q" data-bind="jr-q" placeholder="Search your journal…" value="${esc(ui.jr.q)}" style="max-width:340px">
+        <select data-change="jr-month" style="width:auto"><option value="all">All months</option>${months.map((m) => `<option value="${m}" ${ui.jr.month === m ? 'selected' : ''}>${monthLabel(m)}</option>`).join('')}</select>
+      </div>
+      <div id="jr-list" class="stack">${v.html}</div>`;
+  }
+  function journalModal(date) {
+    const isNew = !date, d = date || todayStr(), cur = (data.journal[d] && data.journal[d].text) || '';
+    openModal(isNew ? 'New journal entry' : 'Journal · ' + fmtLong(d), `
+      <div class="field"><label>Date</label><input type="date" id="j-date" value="${d}" ${isNew ? '' : 'disabled'}></div>
+      <div class="field"><label>Entry</label><textarea id="j-text" style="min-height:230px" placeholder="How did the day go? What clicked, what to revisit…">${esc(cur)}</textarea></div>
+      ${!isNew ? `<button class="btn danger sm" data-action="jr-del" data-date="${d}">Delete this entry</button>` : ''}`,
+    () => {
+      const dd = $('#j-date').value, text = $('#j-text').value;
+      if (!dd) { toast('Pick a date'); return false; }
+      if (isNew && data.journal[dd] && String(data.journal[dd].text || '').trim()) { toast('That day already has an entry. Open it with Edit.'); return false; }
+      if (!text.trim() && !data.journal[dd]) { toast('Write something first'); return false; }
+      data.journal[dd] = { text, updatedAt: Date.now() };
+      persist(true); render();
+    });
+    const t = $('#j-text'); if (t) t.focus();
+  }
+
+  // =====================================================================
   //  RENDER + EVENTS
   // =====================================================================
   function render() {
     $$('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === ui.page));
     const main = $('#main');
     const keep = main.scrollTop;
-    main.innerHTML = ui.page === 'today' ? pageToday() : ui.page === 'progress' ? pageProgress() : pageLibrary();
+    main.innerHTML = ({ today: pageToday, timetable: pageTimetable, progress: pageProgress, journal: pageJournal, library: pageLibrary }[ui.page] || pageToday)();
     main.scrollTop = keep;
+    if (ui.page === 'timetable' && ui.tt.scrollNow) {
+      ui.tt.scrollNow = false;
+      const target = $('.tb.st-now, .tb.st-upcoming') || $('.tl-now');
+      if (target) main.scrollTop = Math.max(0, target.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop - 90);
+    }
     if (ui.page === 'library') store.location().then((p) => { const el = $('#loc'); if (el) el.textContent = 'Data file: ' + p; });
     if (ui.page !== 'today') document.title = 'Study Tracker';
     tick();
@@ -879,7 +1371,7 @@
   }
 
   const actions = {
-    nav: (el) => { ui.page = el.dataset.page; render(); },
+    nav: (el) => { ui.page = el.dataset.page; if (ui.page === 'timetable') { ui.tt.date = null; ui.tt.scrollNow = true; } render(); },
     'modal-bg': (el, e) => { if (e.target === el) closeModal(); },
     'modal-close': () => closeModal(),
 
@@ -940,6 +1432,101 @@
       startTimer({ type: p.type, topic: p.topic, priority: p.priority, mode: p.minutes ? 'countdown' : 'stopwatch', minutes: p.minutes });
     },
 
+    // --- timer
+    extend: () => {
+      const t = data.timer; if (!t || t.mode !== 'countdown') return;
+      t.targetSec = Math.max(t.targetSec, Math.ceil(elapsedMs(t) / 1000)) + 600; t.alerted = false;
+      persist(true); render(); toast('Added 10 minutes');
+    },
+    // --- entry modal helpers
+    'm-finished': () => {
+      const secs = (parseInt($('#m-h').value, 10) || 0) * 3600 + (parseInt($('#m-min').value, 10) || 0) * 60;
+      if (secs < 60) { toast('Enter the duration first'); return; }
+      setStartFields(Date.now() - secs * 1000);
+    },
+    'm-startnow': () => setStartFields(Date.now()),
+    'entry-unlink': (el) => {
+      const s = live(data.sessions).find((x) => x.id === el.dataset.id);
+      if (s) { delete s.blockId; delete s.planDate; touch(s); closeModal(); persist(true); render(); toast('Unlinked from the timetable'); }
+    },
+    // --- timetable
+    'tt-prev': () => { ui.tt.date = addDays(ttDate(), -1); render(); },
+    'tt-next': () => { ui.tt.date = addDays(ttDate(), 1); render(); },
+    'tt-today': () => { ui.tt.date = activePlanDate(); ui.tt.scrollNow = true; render(); },
+    'tt-view': (el) => { ui.tt.view = el.dataset.v; ui.tt.scrollNow = true; render(); },
+    'tt-scope': (el) => { ui.tt.scope = el.dataset.v; render(); toast(ui.tt.scope === 'day' ? 'Edits now change only this day' : 'Edits now also apply to the days after'); },
+    'tt-add': () => blockModal(ttDate(), null),
+    'tt-edit': (el) => {
+      if (justDragged) return;
+      const b = resolvePlan(ttDate()).blocks.find((x) => x.id === el.dataset.id);
+      if (b) blockModal(ttDate(), b);
+    },
+    'tt-del-modal': (el) => {
+      const id = el.dataset.id;
+      if (confirm('Delete this block from the plan?')) { closeModal(); savePlan(ttDate(), (next) => { next.blocks = next.blocks.filter((x) => x.id !== id); }); }
+    },
+    'tt-quick-add': () => {
+      const ta = $('#tt-quick'); if (!ta) return;
+      const { out, bad } = parseQuickLines(ta.value);
+      if (!out.length) { toast(bad.length ? 'Use the format 14:00 to 15:00 Topic' : 'Type a time range first'); return; }
+      savePlan(ttDate(), (next) => { next.blocks.push(...out); });
+      toast(bad.length ? `Added ${out.length}. Could not read: ${bad[0]}` : `Added ${out.length} ${out.length === 1 ? 'block' : 'blocks'}`);
+    },
+    'tt-start': (el) => startFromBlock(el.dataset.date, el.dataset.id),
+    'tt-skip': (el) => {
+      const date = ttDate(), cur = resolvePlan(date), id = el.dataset.id;
+      const rec = { blocks: clone(cur.blocks), skipped: [...cur.skipped], updatedAt: Date.now() };
+      rec.skipped = rec.skipped.includes(id) ? rec.skipped.filter((x) => x !== id) : [...rec.skipped, id];
+      data.plans[date] = rec; persist(true); render();
+    },
+    'tt-reset': () => {
+      if (!confirm('Remove this day\'s custom plan and go back to the previous plan?')) return;
+      data.plans[ttDate()] = { deleted: true, updatedAt: Date.now() }; persist(true); render();
+    },
+    'tt-clear': () => {
+      if (!resolvePlan(ttDate()).blocks.length) { toast('The plan is already empty'); return; }
+      if (confirm('Clear every block from this day\'s plan?')) savePlan(ttDate(), (next) => { next.blocks = []; next.skipped = []; });
+    },
+    'tt-copy': () => {
+      const from = $('#copy-from').value, date = ttDate();
+      if (!from) { toast('Pick a day to copy from'); return; }
+      if (from === date) { toast('Pick a different day'); return; }
+      const src = resolvePlan(from);
+      if (!src.blocks.length) { toast('That day has no plan'); return; }
+      if (resolvePlan(date).blocks.length && !confirm(`Replace this day's plan with the plan from ${fmtShort(from)}?`)) return;
+      savePlan(date, (next) => { next.blocks = src.blocks.map((b) => ({ ...b, id: uid() })); next.skipped = []; });
+      toast('Plan copied');
+    },
+    'tpl-save': () => {
+      const name = ($('#tpl-name').value || '').trim(), blocks = resolvePlan(ttDate()).blocks;
+      if (!name) { toast('Give the template a name'); return; }
+      if (!blocks.length) { toast('The plan is empty'); return; }
+      data.templates.push(touch({ id: uid(), name, blocks: clone(blocks) }));
+      persist(true); render(); toast(`Saved template "${name}"`);
+    },
+    'tpl-apply': (el) => {
+      const t = live(data.templates).find((x) => x.id === el.dataset.id), date = ttDate(); if (!t) return;
+      if (resolvePlan(date).blocks.length && !confirm(`Replace this day's plan with "${t.name}"?`)) return;
+      savePlan(date, (next) => { next.blocks = t.blocks.map((b) => ({ ...b, id: uid() })); next.skipped = []; });
+    },
+    'tpl-del': (el) => {
+      const t = live(data.templates).find((x) => x.id === el.dataset.id);
+      if (t && confirm(`Delete template "${t.name}"?`)) { t.deleted = true; touch(t); persist(true); render(); }
+    },
+    // --- journal
+    'jr-new': () => journalModal(null),
+    'jr-edit': (el) => journalModal(el.dataset.date),
+    'jr-open': (el) => { ui.date = el.dataset.date; ui.page = 'today'; render(); },
+    'jr-more': (el) => {
+      const t = el.previousElementSibling; if (!t) return;
+      const open = t.classList.toggle('clamp');
+      el.textContent = open ? 'Read more' : 'Show less';
+    },
+    'jr-del': (el) => {
+      const d = el.dataset.date;
+      if (confirm('Delete this journal entry?')) { data.journal[d] = { text: '', updatedAt: Date.now() }; closeModal(); persist(true); render(); }
+    },
+
     'sync-connect': async () => {
       const tok = ($('#s-token').value || '').trim();
       if (!tok) { toast('Paste your GitHub token first'); return; }
@@ -979,6 +1566,14 @@
   // live-typing handlers (no re-render, so inputs keep focus)
   const binds = {
     'f-topic': (el) => { ui.form.topic = el.value; },
+    'm-calc': () => updateEnd(),
+    'b-calc': () => updateBlockDur(),
+    'jr-q': (el) => {
+      ui.jr.q = el.value;
+      const v = journalView(), list = $('#jr-list'), cnt = $('#jr-count');
+      if (list) list.innerHTML = v.html;
+      if (cnt) cnt.textContent = v.count;
+    },
     'f-minutes': (el) => { ui.form.minutes = parseInt(el.value, 10) || 0; },
     'run-comment': (el) => { if (data.timer) { data.timer.comment = el.value; persist(); } },
     journal: (el) => {
@@ -995,6 +1590,9 @@
       const hit = live(data.topics).find((x) => x.name.toLowerCase() === el.value.trim().toLowerCase());
       if (hit) { ui.form.priority = hit.priority; render(); }
     },
+    'tt-date': (el) => { if (el.value) { ui.tt.date = el.value; render(); } },
+    'tt-anchor': (el) => { data.settings.dayStart = el.value || '05:00'; touch(data.settings); persist(true); render(); },
+    'jr-month': (el) => { ui.jr.month = el.value; render(); },
     'prog-month': (el) => { if (el.value) { ui.prog.month = el.value; render(); } },
     'prog-anchor': (el) => { if (el.value) { ui.prog.anchor = el.value; render(); } },
     'prog-from': (el) => { if (el.value) { ui.prog.from = el.value; render(); } },
@@ -1024,6 +1622,6 @@
     if (sync.token) runSync();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { get data() { return data; }, ui, render, mergeData, todayStr };
+    window.__st = { get data() { return data; }, ui, render, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();
