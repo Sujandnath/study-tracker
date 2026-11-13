@@ -105,6 +105,7 @@
       version: 1,
       deviceId: uid(),
       topics: [],
+      subjects: [],
       presets: [
         { id: 'preset-pomodoro-25', name: 'Pomodoro 25', topic: '', type: 'study', priority: 'medium', minutes: 25, updatedAt: t },
         { id: 'preset-deep-focus-50', name: 'Deep focus 50', topic: '', type: 'study', priority: 'high', minutes: 50, updatedAt: t },
@@ -128,7 +129,7 @@
     d = d && typeof d === 'object' ? d : base;
     d.version = 1;
     d.deviceId = d.deviceId || base.deviceId;
-    for (const k of ['topics', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
+    for (const k of ['topics', 'subjects', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
     if (!d.plans || typeof d.plans !== 'object' || Array.isArray(d.plans)) d.plans = {};
     if (!Array.isArray(d.categories)) d.categories = [];
     BUILTIN_CATS.forEach((b) => { if (!d.categories.some((x) => x.id === b.id)) d.categories.push({ ...b, updatedAt: 0 }); });
@@ -156,6 +157,7 @@
     const inc = normalize(incoming);
     const out = normalize(local);
     out.topics = mergeById(out.topics, inc.topics);
+    out.subjects = mergeById(out.subjects, inc.subjects);
     const seen = new Map();
     out.topics.filter((t) => !t.deleted).sort((x, y) => (x.id < y.id ? -1 : 1)).forEach((t) => {
       const k = t.name.toLowerCase();
@@ -196,8 +198,9 @@
     jr: { q: '', month: 'all' },
     donut: { mode: 'type', sel: null },
     imp: { text: false },
+    lib: { org: false, sel: [] },
     form: { type: 'study', topic: '', priority: 'medium', mode: 'stopwatch', minutes: 25 },
-    prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr() }
+    prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr(), incOther: false, open: {} }
   };
 
   let saveTimer;
@@ -246,7 +249,7 @@
     const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
     try { return JSON.parse(text); } catch { return null; }
   }
-  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
+  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
 
   async function runSync() {
     if (!sync.token) return;
@@ -815,6 +818,7 @@
     if (w.longest) hi.push(`<div class="hl"><span class="k">Longest session</span><b>${esc(w.longest.topic)}</b> · ${short(w.longest.seconds)}</div>`);
     if (w.focusTop) hi.push(`<div class="hl"><span class="k">Most focused topic</span><b>${esc(w.focusTop.name)}</b> · ${w.focusTop.avg.toFixed(1)} / 5</div>`);
     if (w.best.sec) hi.push(`<div class="hl"><span class="k">Best day</span><b>${fmtDow(w.best.d)}</b> · ${short(w.best.sec)}</div>`);
+    { const sg = live(data.subjects).length ? subjectGroups(w.all, false).filter((g) => g.id !== '_none')[0] : null; if (sg) hi.push(`<div class="hl"><span class="k">Most studied subject</span><b>${esc(sg.name)}</b> · ${short(sg.sec)}</div>`); }
     return {
       w, p,
       summary: `<div class="card rv-sum"><p>${parts.join(' ')}</p></div>`,
@@ -842,6 +846,7 @@
         .sort((x, y) => y.sec - x.sec);
     }
     const work = list.filter(isWork);
+    if (mode === 'subject') return subjectGroups(list, false).map((g) => ({ name: g.name, sec: g.sec, color: g.color }));
     if (mode === 'prio') return Object.entries(PRIOS).map(([k, v]) => ({ name: v.label, sec: sum(work.filter((s) => s.priority === k)), color: v.color })).filter((x) => x.sec > 0);
     const map = new Map();
     work.forEach((s) => { const k = s.topic.toLowerCase(), e = map.get(k) || { name: s.topic, sec: 0 }; e.sec += s.seconds; map.set(k, e); });
@@ -862,7 +867,7 @@
       const el = `<circle class="dn ${sel !== null && sel !== i ? 'dim' : ''}" data-action="donut-pick" data-i="${i}" cx="80" cy="80" r="${R}" fill="none" stroke="${s.color}" stroke-width="20" stroke-dasharray="${draw} ${C - draw}" stroke-dashoffset="${-off}" transform="rotate(-90 80 80)"><title>${esc(s.name)} · ${short(s.sec)}</title></circle>`;
       off += len; return el;
     }).join('');
-    const caption = mode === 'type' ? 'tracked' : 'study + other';
+    const caption = mode === 'type' ? 'tracked' : mode === 'subject' ? 'study' : 'study + other';
     const centre = sel !== null
       ? `<b>${short(slices[sel].sec)}</b><span>${esc(slices[sel].name)}</span><span>${Math.round(slices[sel].sec / total * 100)}%</span>`
       : `<b>${total ? short(total) : '–'}</b><span>${total ? caption : 'nothing yet'}</span>`;
@@ -872,7 +877,7 @@
         </div>`).join('') : '<div class="note">Log some time and your split shows up here.</div>';
     return `
       <div class="seg donut-filter">
-        ${[['type', 'Type'], ['topic', 'Topic'], ['prio', 'Importance']].map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-action="donut-mode" data-v="${k}">${l}</button>`).join('')}
+        ${[['type', 'Type'], ...(live(data.subjects).length ? [['subject', 'Subject']] : []), ['topic', 'Topic'], ['prio', 'Importance']].map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-action="donut-mode" data-v="${k}">${l}</button>`).join('')}
       </div>
       <div class="donut-wrap">
         <div class="donut"><svg viewBox="0 0 160 160" role="img" aria-label="Time split"><circle cx="80" cy="80" r="${R}" fill="none" stroke="#eef2f7" stroke-width="20"/>${arcs}</svg><div class="dc">${centre}</div></div>
@@ -941,6 +946,116 @@
     let now = '';
     if (isToday) { const m = (Date.now() - W0) / 60000; if (m >= from && m <= to) now = `<div class="tl-now" style="top:${(m - from) / 60 * tlh}px"></div>`; }
     return `<div class="card">${head}<div class="tl compact actual" style="height:${Math.max(120, (to - from) / 60 * tlh)}px">${hours}<div class="tl-lane actual">${actualBlocksHtml(raw, W0, from, tlh)}</div>${now}</div></div>`;
+  }
+
+  // =====================================================================
+  //  v7: SUBJECTS – group topics (Reasoning, Quant, Hindi…). A topic has at
+  //  most one subject; deleting a subject leaves its topics without one.
+  // =====================================================================
+  function subjectGroups(list, incOther) {
+    const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t]));
+    const smap = new Map(live(data.subjects).map((s) => [s.id, s]));
+    const groups = new Map();
+    list.filter((s) => (incOther ? isWork(s) : kindOf(s.type) === 'study')).forEach((s) => {
+      const t = tmap.get(s.topic.toLowerCase()), sub = t && t.subjectId ? smap.get(t.subjectId) : null;
+      const key = sub ? sub.id : '_none';
+      const g = groups.get(key) || { id: key, name: sub ? sub.name : 'No subject', color: sub ? sub.color : '#cbd5e1', sec: 0, topics: new Map() };
+      const k = s.topic.toLowerCase(), e = g.topics.get(k) || { name: s.topic, sec: 0 };
+      g.sec += s.seconds; e.sec += s.seconds; g.topics.set(k, e); groups.set(key, g);
+    });
+    return [...groups.values()].map((g) => ({ ...g, topics: [...g.topics.values()].sort((x, y) => y.sec - x.sec) }))
+      .sort((x, y) => (x.id === '_none') - (y.id === '_none') || y.sec - x.sec);
+  }
+  function subjectCard(all) {
+    const inc = ui.prog.incOther, subs = live(data.subjects);
+    const toggle = `<div class="seg sm"><button class="${!inc ? 'on' : ''}" data-action="subj-inc" data-v="0">Study</button><button class="${inc ? 'on' : ''}" data-action="subj-inc" data-v="1">+ Other</button></div>`;
+    if (!subs.length) {
+      return `<div class="card"><h2>By topic ${toggle}</h2>${topicBreakdown(inc ? all : all.filter((s) => kindOf(s.type) === 'study'))}
+        <p class="note" style="margin-top:10px">Too many topics? <button class="linkbtn" data-action="nav" data-page="library">Group them into subjects</button></p></div>`;
+    }
+    const groups = subjectGroups(all, inc);
+    if (!groups.length) return `<div class="card"><h2>By subject ${toggle}</h2><div class="empty"><b>No study data in this range</b>Log some time and it will show up here.</div></div>`;
+    const max = groups[0].sec || 1;
+    const rows = groups.map((g) => {
+      const open = !!ui.prog.open[g.id];
+      return `<div class="sg ${open ? 'open' : ''}">
+        <div class="hrow sg-head" data-action="subj-toggle" data-id="${g.id}">
+          <div class="nm"><span class="caret">›</span><span class="tdot" style="background:${g.color}"></span><span class="t">${esc(g.name)}</span><span class="note" style="margin-left:6px;font-weight:500">${g.topics.length}</span></div>
+          <div class="bar"><i style="width:${g.sec / max * 100}%;background:${g.color}"></i></div>
+          <div class="val">${short(g.sec)}</div></div>
+        ${open ? `<div class="sg-body">${g.topics.map((t) => `
+          <div class="hrow sub"><div class="nm" title="${esc(t.name)}">${esc(t.name)}</div><div class="bar"><i style="width:${t.sec / g.sec * 100}%;background:${g.color};opacity:.55"></i></div><div class="val">${short(t.sec)}</div></div>`).join('')}</div>` : ''}
+      </div>`;
+    }).join('');
+    return `<div class="card"><h2>By subject ${toggle}</h2>${rows}<p class="note" style="margin-top:8px">Tap a subject to see its topics.</p></div>`;
+  }
+
+  function subjectsCard() {
+    const subs = live(data.subjects).sort((x, y) => x.name.localeCompare(y.name));
+    const count = (id) => live(data.topics).filter((t) => t.subjectId === id).length;
+    return `<div class="card">
+      <h2>Subjects <button class="btn sm primary" data-action="subj-add">+ New subject</button></h2>
+      ${subs.length ? subs.map((s) => `
+        <div class="list-row">
+          <div class="grow"><div class="nm"><span class="tdot" style="background:${s.color}"></span>${esc(s.name)}</div>
+            <div class="meta">${count(s.id)} ${count(s.id) === 1 ? 'topic' : 'topics'}</div></div>
+          <button class="btn sm" data-action="subj-edit" data-id="${s.id}">Edit</button>
+          <button class="btn sm danger" data-action="subj-del" data-id="${s.id}">Delete</button>
+        </div>`).join('')
+      : `<div class="empty"><b>No subjects yet</b>Group your topics under main subjects so Progress stays tidy.
+          <div style="margin-top:12px"><button class="btn sm" data-action="subj-suggest">Add Reasoning, Quant, Hindi, Accountancy &amp; Computer, Banking Awareness</button></div></div>`}
+      <p class="note" style="margin-top:10px">Deleting a subject keeps its topics; they just have no subject.</p>
+    </div>`;
+  }
+
+  function topicsCard() {
+    const topics = live(data.topics).sort((x, y) => x.name.localeCompare(y.name));
+    const subs = live(data.subjects).sort((x, y) => x.name.localeCompare(y.name));
+    const subIds = new Set(subs.map((s) => s.id));
+    const org = ui.lib.org, sel = new Set(ui.lib.sel);
+    const opts = (cur) => `<option value="">No subject</option>${subs.map((s) => `<option value="${s.id}" ${cur === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}`;
+    const row = (t) => `
+      <div class="list-row">
+        ${org ? `<input type="checkbox" class="org-ck" data-action="org-pick" data-id="${t.id}" ${sel.has(t.id) ? 'checked' : ''} aria-label="Select ${esc(t.name)}">` : ''}
+        <div class="grow"><div class="nm">${typeDot(t.type)}${esc(t.name)}</div>
+          <div class="meta">${esc(cat(t.type).name)} · ${short(topicTotal(t.name))} logged in total</div></div>
+        ${prioPill(t.priority)}
+        ${subs.length && !org ? `<select class="subj-sel" data-change="topic-subject" data-id="${t.id}" aria-label="Subject">${opts(subIds.has(t.subjectId) ? t.subjectId : '')}</select>` : ''}
+        ${org ? '' : `<button class="btn sm" data-action="topic-edit" data-id="${t.id}">Edit</button>
+        <button class="btn sm danger" data-action="topic-del" data-id="${t.id}">Delete</button>`}
+      </div>`;
+    let body;
+    if (!topics.length) body = '<div class="empty"><b>No saved topics yet</b>Add one here, or just start a timer – new topics are saved automatically.</div>';
+    else if (!subs.length) body = topics.map(row).join('');
+    else {
+      const groups = [...subs.map((s) => ({ name: s.name, color: s.color, list: topics.filter((t) => t.subjectId === s.id) })),
+        { name: 'No subject', color: '#cbd5e1', list: topics.filter((t) => !subIds.has(t.subjectId)) }].filter((g) => g.list.length);
+      body = groups.map((g) => `<div class="grp-head"><span class="tdot" style="background:${g.color}"></span>${esc(g.name)}<small>${g.list.length} ${g.list.length === 1 ? 'topic' : 'topics'} · ${short(g.list.reduce((n, t) => n + topicTotal(t.name), 0))}</small></div>${g.list.map(row).join('')}`).join('');
+    }
+    const bar = org ? `<div class="org-bar"><span>${sel.size} selected</span>
+        <select id="org-target">${opts('')}</select>
+        <button class="btn sm primary" data-action="org-apply">Move</button>
+        <button class="btn sm" data-action="org-toggle">Done</button></div>` : '';
+    return `<div class="card">
+      <h2>Topics <span class="row tight">${subs.length && topics.length ? `<button class="btn sm ${org ? 'on' : ''}" data-action="org-toggle">${org ? 'Done' : 'Organise'}</button>` : ''}<button class="btn sm primary" data-action="topic-add">+ New topic</button></span></h2>
+      ${bar}${body}
+    </div>`;
+  }
+
+  function subjectModal(existing) {
+    const x = existing || { name: '', color: DONUT_COLORS[live(data.subjects).length % DONUT_COLORS.length] };
+    openModal(existing ? 'Edit subject' : 'New subject', `
+      <div class="field"><label>Name</label><input type="text" id="sj-name" value="${esc(x.name)}" placeholder="e.g. Reasoning"></div>
+      <div class="field"><label>Colour</label><input type="color" id="sj-color" value="${esc(x.color)}"></div>`, () => {
+      const name = $('#sj-name').value.trim();
+      if (!name) { toast('Give the subject a name'); return false; }
+      if (live(data.subjects).some((s) => s.name.toLowerCase() === name.toLowerCase() && (!existing || s.id !== existing.id))) { toast('A subject with that name already exists'); return false; }
+      const rec = existing || { id: uid() };
+      Object.assign(rec, { name, color: $('#sj-color').value || x.color });
+      touch(rec);
+      if (!existing) data.subjects.push(rec);
+      persist(true); render();
+    });
   }
 
   // =====================================================================
@@ -1255,7 +1370,7 @@
         ${p.mode === 'month' ? `<div class="card"><h2>Calendar <small>darker = more study · click a day to open it</small></h2>${heatmap(r, perDay)}</div>` : ''}
 
         <div class="two">
-          <div class="card"><h2>By topic <small>study + other</small></h2>${topicBreakdown(all)}</div>
+          ${subjectCard(all)}
           <div class="card"><h2>By importance <small>study + other</small></h2>${prioBreakdown(all)}<div style="height:18px"></div><h2>Time split</h2>${splitBar(tot)}</div>
         </div>
         ${wr ? wr.highlights + wr.days : ''}
@@ -1372,18 +1487,8 @@
       <div class="page-head"><div><h1>Topics &amp; Presets</h1><p class="sub">Save what you study and how you like to time it</p></div></div>
       <div class="grid">
         <div class="stack">
-          <div class="card">
-            <h2>Topics <button class="btn sm primary" data-action="topic-add">+ New topic</button></h2>
-            ${topics.length ? topics.map((t) => `
-              <div class="list-row">
-                <div class="grow"><div class="nm">${typeDot(t.type)}${esc(t.name)}</div>
-                  <div class="meta">${esc(cat(t.type).name)} · ${short(topicTotal(t.name))} logged in total</div></div>
-                ${prioPill(t.priority)}
-                <button class="btn sm" data-action="topic-edit" data-id="${t.id}">Edit</button>
-                <button class="btn sm danger" data-action="topic-del" data-id="${t.id}">Delete</button>
-              </div>`).join('')
-            : '<div class="empty"><b>No saved topics yet</b>Add one here, or just start a timer – new topics are saved automatically.</div>'}
-          </div>
+          ${subjectsCard()}
+          ${topicsCard()}
           ${categoriesCard()}
         </div>
         <div class="stack">
@@ -1427,6 +1532,7 @@
     openModal(existing ? 'Edit topic' : 'New topic', `
       <div class="field"><label>Name</label><input type="text" id="t-name" value="${esc(t.name)}" placeholder="e.g. Organic Chemistry"></div>
       <div class="field"><label>Type</label><select id="t-type">${cats().filter((x) => x.kind === 'study' || x.kind === 'neutral').map((x) => `<option value="${esc(x.id)}" ${t.type === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+      ${live(data.subjects).length ? `<div class="field"><label>Subject</label><select id="t-subj"><option value="">No subject</option>${live(data.subjects).sort((x, y) => x.name.localeCompare(y.name)).map((s) => `<option value="${s.id}" ${t.subjectId === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>` : ''}
       <div class="field"><label>Default importance</label><select id="t-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>`,
     () => {
       const name = $('#t-name').value.trim();
@@ -1435,6 +1541,7 @@
       if (dup) { toast('A topic with that name already exists'); return false; }
       const rec = existing || { id: uid() };
       Object.assign(rec, { name, type: $('#t-type').value, priority: $('#t-prio').value });
+      { const sj = $('#t-subj'); if (sj) { if (sj.value) rec.subjectId = sj.value; else delete rec.subjectId; } }
       touch(rec);
       if (!existing) data.topics.push(rec);
       persist(true); render();
@@ -2139,6 +2246,27 @@
       const t = live(data.templates).find((x) => x.id === el.dataset.id);
       if (t) softDelete(t, `Deleted template "${t.name}"`);
     },
+    // --- subjects
+    'subj-add': () => subjectModal(null),
+    'subj-edit': (el) => { const s = live(data.subjects).find((x) => x.id === el.dataset.id); if (s) subjectModal(s); },
+    'subj-del': (el) => { const s = live(data.subjects).find((x) => x.id === el.dataset.id); if (s) softDelete(s, `Deleted subject "${s.name}". Its topics now have no subject`); },
+    'subj-suggest': () => {
+      ['Reasoning', 'Quant', 'Hindi', 'Accountancy & Computer', 'Banking Awareness'].forEach((name, i) => {
+        if (!live(data.subjects).some((s) => s.name.toLowerCase() === name.toLowerCase())) data.subjects.push(touch({ id: uid(), name, color: DONUT_COLORS[i % DONUT_COLORS.length] }));
+      });
+      persist(true); render(); toast('Subjects added. Use Organise to sort your topics into them');
+    },
+    'subj-toggle': (el) => { ui.prog.open[el.dataset.id] = !ui.prog.open[el.dataset.id]; render(); },
+    'subj-inc': (el) => { ui.prog.incOther = el.dataset.v === '1'; render(); },
+    'org-toggle': () => { ui.lib.org = !ui.lib.org; ui.lib.sel = []; render(); },
+    'org-pick': (el) => { const i = ui.lib.sel.indexOf(el.dataset.id); if (i >= 0) ui.lib.sel.splice(i, 1); else ui.lib.sel.push(el.dataset.id); render(); },
+    'org-apply': () => {
+      if (!ui.lib.sel.length) { toast('Tick some topics first'); return; }
+      const target = ($('#org-target') || {}).value || '';
+      let n = 0;
+      ui.lib.sel.forEach((id) => { const t = data.topics.find((x) => x.id === id); if (t) { if (target) t.subjectId = target; else delete t.subjectId; touch(t); n++; } });
+      ui.lib.sel = []; persist(true); render(); toast(`Moved ${n} ${n === 1 ? 'topic' : 'topics'}`);
+    },
     // --- important topics
     'imp-add': () => {
       const el = $('#imp-new'), lines = String((el && el.value) || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -2307,6 +2435,7 @@
     },
     'gap-cap': (el) => { data.settings.gapCapMin = Math.min(720, Math.max(10, parseInt(el.value, 10) || 120)); touch(data.settings); persist(true); render(); toast('Updated'); },
     'rest-limit': (el) => { data.settings.restPerWeek = Math.min(7, Math.max(0, parseInt(el.value, 10) || 0)); touch(data.settings); persist(true); toast('Updated'); },
+    'topic-subject': (el) => { const t = data.topics.find((x) => x.id === el.dataset.id); if (t) { if (el.value) t.subjectId = el.value; else delete t.subjectId; touch(t); persist(true); render(); } },
     'imp-done': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.done = !!el.checked; touch(it); persist(true); render(); } },
     'ask-focus': (el) => { data.settings.askFocus = !!el.checked; touch(data.settings); persist(true); },
     sound: (el) => { data.settings.sound = !!el.checked; touch(data.settings); persist(true); if (el.checked) ting(); },
@@ -2343,6 +2472,6 @@
     if (sync.token) runSync();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { get data() { return data; }, ui, render, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
+    window.__st = { get data() { return data; }, ui, render, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();
