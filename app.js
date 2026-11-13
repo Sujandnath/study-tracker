@@ -112,6 +112,7 @@
       ],
       sessions: [],
       journal: {},
+      important: { title: 'Main topics', titleAt: 0, items: [] },
       rest: {},
       checkins: {},
       categories: BUILTIN_CATS.map((b) => ({ ...b, updatedAt: 0 })),
@@ -134,6 +135,10 @@
     d.timerUpdatedAt = d.timerUpdatedAt || 0;
     if (!d.journal || typeof d.journal !== 'object') d.journal = {};
     for (const k of ['rest', 'checkins']) if (!d[k] || typeof d[k] !== 'object' || Array.isArray(d[k])) d[k] = {};
+    if (!d.important || typeof d.important !== 'object' || Array.isArray(d.important)) d.important = {};
+    d.important.title = d.important.title || 'Main topics';
+    d.important.titleAt = d.important.titleAt || 0;
+    if (!Array.isArray(d.important.items)) d.important.items = [];
     d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, updatedAt: 0 }, d.settings || {});
     if (!d.timer) d.timer = null;
     return d;
@@ -165,6 +170,8 @@
       if (!out.plans[day] || (p.updatedAt || 0) > (out.plans[day].updatedAt || 0)) out.plans[day] = p;
     }
     out.templates = mergeById(out.templates, inc.templates);
+    if ((inc.important.titleAt || 0) > (out.important.titleAt || 0)) { out.important.title = inc.important.title; out.important.titleAt = inc.important.titleAt; }
+    out.important.items = mergeById(out.important.items, inc.important.items);
     for (const k of ['rest', 'checkins']) {
       for (const [day, v] of Object.entries(inc[k])) {
         if (!out[k][day] || (v.updatedAt || 0) > (out[k][day].updatedAt || 0)) out[k][day] = v;
@@ -187,7 +194,8 @@
     date: todayStr(),
     tt: { date: null, view: 'list', scope: 'onward', scrollNow: false },
     jr: { q: '', month: 'all' },
-    rv: { anchor: todayStr() },
+    donut: { mode: 'type', sel: null },
+    imp: { text: false },
     form: { type: 'study', topic: '', priority: 'medium', mode: 'stopwatch', minutes: 25 },
     prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr() }
   };
@@ -238,7 +246,7 @@
     const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
     try { return JSON.parse(text); } catch { return null; }
   }
-  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, presets: d.presets, sessions: d.sessions, journal: d.journal, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
+  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
 
   async function runSync() {
     if (!sync.token) return;
@@ -336,6 +344,7 @@
     if (e.key === 'Escape') closeModal();
     if (e.key === 'Enter' && $('#modal-save') && e.target.tagName === 'INPUT') $('#modal-save').click();
     if (e.key === 'Enter' && e.target.id === 'qa') { e.preventDefault(); actions['qa-add'](); }
+    if (e.key === 'Enter' && e.target.id === 'imp-new') { e.preventDefault(); actions['imp-add'](); }
   });
 
   // ---------- timer ----------
@@ -427,7 +436,7 @@
     const t = data && data.timer;
     const mini = $('#mini');
     const nowMs = Date.now();
-    if (ui.page === 'timetable' && nowMs - lastLive > 30000) {
+    if ((ui.page === 'timetable' || ui.page === 'today') && nowMs - lastLive > 30000) {
       lastLive = nowMs;
       const busy = drag || $('#modal-root').innerHTML || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '');
       if (!busy) { render(); return; }
@@ -492,7 +501,7 @@
   function dayStats(d) {
     const list = sessionsOn(d), tot = totals(list), isToday = d === todayStr(), now = Date.now();
     const iv = list.map((s) => ({ s: s.start, e: s.start + s.seconds * 1000, kind: kindOf(s.type) }));
-    if (isToday && data.timer) iv.push({ s: data.timer.startWall, e: now, kind: kindOf(data.timer.type) });
+    if (isToday && data.timer) iv.push({ s: data.timer.startWall, e: data.timer.startWall + elapsedMs(data.timer), kind: kindOf(data.timer.type) }); // paused time is not studying
     const sleeps = iv.filter((x) => x.kind === 'sleep').sort((x, y) => (y.e - y.s) - (x.e - x.s));
     const wake = sleeps.length ? sleeps[0].e : null;
     const occ = iv.filter((x) => x.kind !== 'sleep' || (wake !== null && x.s >= wake - 60000 && x !== sleeps[0])).sort((x, y) => x.s - y.s);
@@ -780,11 +789,11 @@
     const longest = all.filter(isWork).sort((x, y) => y.seconds - x.seconds)[0] || null;
     return { all, perDay, sum, goalDays, activeDays, restDays, daysElapsed, best, sleepNights, avgMood: avg(moods), nMood: moods.length, avgDayFocus: avg(dayFocus), avgSession: avg(rated.map((s) => s.focus)), nRated: rated.length, focusTop, longest };
   }
-  function pageReview() {
-    const from = weekStart(ui.rv.anchor), to = addDays(from, 6), thisWeek = from === weekStart(todayStr());
+  // The weekly review lives inside Progress (Week mode)
+  function weekReview(from) {
+    const to = addDays(from, 6), thisWeek = from === weekStart(todayStr());
     const w = weekStats(from, to), p = weekStats(addDays(from, -7), addDays(from, -1));
-    const r = { from, to }, goal = data.settings.dailyGoalMin * 60;
-    const diff = w.sum.study - p.sum.study;
+    const goal = data.settings.dailyGoalMin * 60, diff = w.sum.study - p.sum.study;
     const parts = [];
     parts.push(w.sum.study
       ? `You studied <b>${short(w.sum.study)}</b> ${thisWeek ? 'so far this week' : 'this week'}${p.sum.study ? (diff >= 0 ? `, <b>${short(diff)} more</b> than the week before` : `, <b>${short(-diff)} less</b> than the week before`) : ''}.`
@@ -806,35 +815,132 @@
     if (w.longest) hi.push(`<div class="hl"><span class="k">Longest session</span><b>${esc(w.longest.topic)}</b> · ${short(w.longest.seconds)}</div>`);
     if (w.focusTop) hi.push(`<div class="hl"><span class="k">Most focused topic</span><b>${esc(w.focusTop.name)}</b> · ${w.focusTop.avg.toFixed(1)} / 5</div>`);
     if (w.best.sec) hi.push(`<div class="hl"><span class="k">Best day</span><b>${fmtDow(w.best.d)}</b> · ${short(w.best.sec)}</div>`);
-    return `
-      <div class="page-head"><div><h1>Weekly review</h1><p class="sub">${fmtShort(from)} – ${fmtShort(to)}${thisWeek ? ' · this week' : ''}</p></div></div>
-      <div class="controls">
-        <button class="btn icon" data-action="rv-prev" aria-label="Previous week">${chev('left')}</button>
-        <div class="range-label">${fmtShort(from)} – ${fmtShort(to)}</div>
-        <button class="btn icon" data-action="rv-next" aria-label="Next week">${chev('right')}</button>
-        <input type="date" data-change="rv-anchor" value="${ui.rv.anchor}">
-        <button class="btn" data-action="rv-now">This week</button>
-      </div>
-      <div class="stack">
-        <div class="card rv-sum"><p>${parts.join(' ')}</p></div>
-        <div class="tiles six">
-          <div class="tile"><div class="k">Total study</div><div class="v">${short(w.sum.study)}</div><div class="s">${p.sum.study ? (diff >= 0 ? '+' : '−') + short(Math.abs(diff)) + ' vs last week' : 'no data last week'}</div></div>
+    return {
+      w, p,
+      summary: `<div class="card rv-sum"><p>${parts.join(' ')}</p></div>`,
+      delta: p.sum.study ? (diff >= 0 ? '+' : '−') + short(Math.abs(diff)) + ' vs last week' : 'no data last week',
+      extraTiles: `
           <div class="tile"><div class="k">Goal days</div><div class="v">${w.goalDays}<span style="font-size:14px;color:var(--muted)"> / ${w.daysElapsed}</span></div><div class="s">goal ${short(goal)} a day</div></div>
-          <div class="tile"><div class="k">Active days</div><div class="v">${w.activeDays}<span style="font-size:14px;color:var(--muted)"> / 7</span></div><div class="s">${w.restDays ? w.restDays + ' rest' : 'days with study'}</div></div>
-          ${adhTile(r)}
-          <div class="tile"><div class="k">Avg sleep</div><div class="v">${w.sleepNights ? short(w.sum.sleep / w.sleepNights) : '–'}</div><div class="s">${w.sleepNights ? 'over ' + w.sleepNights + (w.sleepNights === 1 ? ' night' : ' nights') : 'no sleep logged'}</div></div>
-          <div class="tile"><div class="k">Session focus</div><div class="v">${w.nRated ? w.avgSession.toFixed(1) : '–'}</div><div class="s">${w.nRated ? 'out of 5 · ' + w.nRated + ' rated' : 'rate after a timer'}</div></div>
-          <div class="tile"><div class="k">Mood</div><div class="v">${w.nMood ? mood(w.avgMood) : '–'}</div><div class="s">${w.nMood ? w.avgMood.toFixed(1) + ' / 5 · ' + w.nMood + (w.nMood === 1 ? ' check-in' : ' check-ins') : 'no check-ins'}</div></div>
-          <div class="tile"><div class="k">Streak</div><div class="v">${streak()}<span style="font-size:14px;color:var(--muted)"> ${streak() === 1 ? 'day' : 'days'}</span></div><div class="s">current</div></div>
-        </div>
-        <div class="card"><h2>Daily time <small>hours</small></h2><div class="chart-wrap">${barChart(r, w.perDay, 7)}</div>
-          <div class="legend">${['study', 'break', 'neutral'].map((k) => `<span><span class="tdot" style="background:${KIND_COLOR[k]}"></span>${KLABEL[k]}</span>`).join('')}</div></div>
-        <div class="two">
-          <div class="card"><h2>Top topics <small>study + other</small></h2>${topicBreakdown(w.all)}</div>
-          <div class="card"><h2>Highlights</h2>${hi.length ? hi.join('') : '<div class="note">Highlights appear once you have logged some study.</div>'}</div>
-        </div>
-        <div class="card"><h2>Day by day <small>tap a day to open it</small></h2><div class="rv-days">${dayRows}</div></div>
+          <div class="tile"><div class="k">Mood</div><div class="v">${w.nMood ? mood(w.avgMood) : '–'}</div><div class="s">${w.nMood ? w.avgMood.toFixed(1) + ' / 5 · ' + w.nMood + (w.nMood === 1 ? ' check-in' : ' check-ins') : 'no check-ins'}</div></div>`,
+      highlights: hi.length ? `<div class="card"><h2>Highlights</h2><div class="hl-row">${hi.join('')}</div></div>` : '',
+      days: `<div class="card"><h2>Day by day <small>tap a day to open it</small></h2><div class="rv-days">${dayRows}</div></div>`
+    };
+  }
+
+  // =====================================================================
+  //  v5: donut chart + goal ring (Today), actual timeline
+  // =====================================================================
+  const DONUT_COLORS = ['#2563eb', '#0ea5e9', '#14b8a6', '#8b5cf6', '#f59e0b', '#ec4899', '#64748b'];
+  function donutSlices(list, ds, mode) {
+    const sum = (arr) => arr.reduce((n, s) => n + s.seconds, 0);
+    if (mode === 'type') {
+      const m = {};
+      list.filter((s) => kindOf(s.type) !== 'sleep').forEach((s) => { m[s.type] = (m[s.type] || 0) + s.seconds; });
+      if (ds.gapBreak) m.break = (m.break || 0) + ds.gapBreak;
+      return Object.entries(m).filter(([, v]) => v > 0)
+        .map(([id, v]) => ({ name: cat(id).name + (id === 'break' && ds.gapBreak ? ' (incl. gaps)' : ''), sec: v, color: cat(id).color }))
+        .sort((x, y) => y.sec - x.sec);
+    }
+    const work = list.filter(isWork);
+    if (mode === 'prio') return Object.entries(PRIOS).map(([k, v]) => ({ name: v.label, sec: sum(work.filter((s) => s.priority === k)), color: v.color })).filter((x) => x.sec > 0);
+    const map = new Map();
+    work.forEach((s) => { const k = s.topic.toLowerCase(), e = map.get(k) || { name: s.topic, sec: 0 }; e.sec += s.seconds; map.set(k, e); });
+    const rows = [...map.values()].sort((x, y) => y.sec - x.sec);
+    const top = rows.slice(0, 6).map((e, i) => ({ ...e, color: DONUT_COLORS[i] }));
+    const rest = rows.slice(6).reduce((n, e) => n + e.sec, 0);
+    if (rest) top.push({ name: 'Others', sec: rest, color: '#cbd5e1' });
+    return top;
+  }
+  function donutCard(list, ds) {
+    const mode = ui.donut.mode, slices = donutSlices(list, ds, mode);
+    const total = slices.reduce((n, s) => n + s.sec, 0);
+    const sel = ui.donut.sel !== null && slices[ui.donut.sel] ? ui.donut.sel : null;
+    const R = 60, C = 2 * Math.PI * R;
+    let off = 0;
+    const arcs = slices.map((s, i) => {
+      const len = s.sec / total * C, draw = Math.max(0.5, len - (slices.length > 1 ? 2 : 0));
+      const el = `<circle class="dn ${sel !== null && sel !== i ? 'dim' : ''}" data-action="donut-pick" data-i="${i}" cx="80" cy="80" r="${R}" fill="none" stroke="${s.color}" stroke-width="20" stroke-dasharray="${draw} ${C - draw}" stroke-dashoffset="${-off}" transform="rotate(-90 80 80)"><title>${esc(s.name)} · ${short(s.sec)}</title></circle>`;
+      off += len; return el;
+    }).join('');
+    const caption = mode === 'type' ? 'tracked' : 'study + other';
+    const centre = sel !== null
+      ? `<b>${short(slices[sel].sec)}</b><span>${esc(slices[sel].name)}</span><span>${Math.round(slices[sel].sec / total * 100)}%</span>`
+      : `<b>${total ? short(total) : '–'}</b><span>${total ? caption : 'nothing yet'}</span>`;
+    const legend = slices.length ? slices.map((s, i) => `
+        <div class="dl-row ${sel !== null && sel !== i ? 'dim' : ''}" data-action="donut-pick" data-i="${i}">
+          <span class="tdot" style="background:${s.color}"></span><span class="nm">${esc(s.name)}</span><span class="vp"><b>${short(s.sec)}</b><i>${Math.round(s.sec / total * 100)}%</i></span>
+        </div>`).join('') : '<div class="note">Log some time and your split shows up here.</div>';
+    return `
+      <div class="seg donut-filter">
+        ${[['type', 'Type'], ['topic', 'Topic'], ['prio', 'Importance']].map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-action="donut-mode" data-v="${k}">${l}</button>`).join('')}
+      </div>
+      <div class="donut-wrap">
+        <div class="donut"><svg viewBox="0 0 160 160" role="img" aria-label="Time split"><circle cx="80" cy="80" r="${R}" fill="none" stroke="#eef2f7" stroke-width="20"/>${arcs}</svg><div class="dc">${centre}</div></div>
+        <div class="dl">${legend}</div>
       </div>`;
+  }
+  function goalBox(study, goal) {
+    if (!goal) return '';
+    const pct = Math.min(100, study / goal * 100), R = 30, C = 2 * Math.PI * R;
+    return `<div class="goalbox">
+      <svg viewBox="0 0 76 76" width="76" height="76" role="img" aria-label="Daily goal progress"><circle cx="38" cy="38" r="${R}" fill="none" stroke="#e8effd" stroke-width="8"/><circle cx="38" cy="38" r="${R}" fill="none" stroke="${pct >= 100 ? '#16a34a' : '#2563eb'}" stroke-width="8" stroke-linecap="round" stroke-dasharray="${C * pct / 100} ${C}" transform="rotate(-90 38 38)"/><text x="38" y="43" text-anchor="middle" font-size="15" font-weight="700" fill="#0f172a">${Math.round(pct)}%</text></svg>
+      <div><div class="lbl">Daily study goal</div><div class="gv">${short(study)}</div><div class="note">of ${short(goal)}${pct >= 100 ? ' · goal reached' : ''}</div></div>
+    </div>`;
+  }
+
+  // ---- actual timeline: everything you logged (all categories, sleep, gaps counted as break, the running timer)
+  const hmOf = (ms) => { const x = new Date(ms); return `${pad(x.getHours())}:${pad(x.getMinutes())}`; };
+  function actualRaw(W0) {
+    const W1 = W0 + 86400000, out = [];
+    live(data.sessions).forEach((s) => {
+      const st = s.start, en = s.start + s.seconds * 1000;
+      if (en > W0 && st < W1) out.push({ id: s.id, topic: s.topic, type: s.type, st, en, linked: !!s.blockId, focus: s.focus, full: s.seconds, run: false });
+    });
+    const t = data.timer;
+    if (t) { const st = t.startWall, en = t.startWall + elapsedMs(t); if (en > W0 && st < W1) out.push({ id: 'timer', topic: t.topic || defaultLabel(t.type), type: t.type, st, en, linked: !!t.blockId, full: Math.round(elapsedMs(t) / 1000), run: true }); }
+    return out.sort((x, y) => x.st - y.st || y.en - x.en);
+  }
+  function actualBlocksHtml(raw, W0, from, tlh) {
+    const W1 = W0 + 86400000, now = Date.now(), MIN_VIS = Math.ceil(20 / tlh * 60), cap = gapCapMin() * 60000;
+    const clip = (o) => { const s = (Math.max(o.st, W0) - W0) / 60000, e = (Math.min(o.en, W1) - W0) / 60000; return { ...o, s, e, ev: Math.max(e, s + MIN_VIS) }; };
+    const gaps = []; let cur = null;
+    raw.forEach((o) => { if (cur !== null && o.st - cur >= 60000 && o.st - cur <= cap) gaps.push({ st: cur, en: o.st }); cur = cur === null ? o.en : Math.max(cur, o.en); });
+    if (cur !== null && now > cur && now - cur <= cap && now > W0 && now < W1) gaps.push({ st: cur, en: now }); // time since the last entry counts as break too
+    const items = raw.map(clip);
+    let cluster = [], cEnd = -1, laneEnds = [];
+    const flush = () => { const n = Math.max(1, ...cluster.map((i) => i.lane + 1)); cluster.forEach((i) => { i.n = n; }); cluster = []; };
+    items.forEach((it) => {
+      if (it.s >= cEnd) { flush(); laneEnds = []; cEnd = it.ev; } else cEnd = Math.max(cEnd, it.ev);
+      let l = laneEnds.findIndex((e) => e <= it.s);
+      if (l < 0) { l = laneEnds.length; laneEnds.push(it.ev); } else laneEnds[l] = it.ev;
+      it.lane = l; cluster.push(it);
+    });
+    flush();
+    const gapHtml = gaps.map((g) => { const s = clip(g); return `<div class="ab gap" title="Gap, counted as break · ${hmOf(g.st)}–${hmOf(g.en)}" style="top:${(s.s - from) / 60 * tlh}px;height:${Math.max(2, (s.e - s.s) / 60 * tlh)}px"></div>`; }).join('');
+    const blocks = items.map((o) => {
+      const label = esc(o.topic || defaultLabel(o.type)), c = cat(o.type);
+      const dur = o.run ? 'running' : short(o.full);
+      const action = o.run ? 'data-action="nav" data-page="today"' : `data-action="entry-edit" data-id="${o.id}"`;
+      return `<div class="ab ${o.run ? 'run' : ''}" ${action} title="${label} · ${hmOf(o.st)}–${hmOf(o.en)} · ${dur}"
+        style="--c:${c.color};top:${(o.s - from) / 60 * tlh}px;height:${Math.max(18, (o.e - o.s) / 60 * tlh)}px;left:calc(${o.lane / o.n * 100}% + 2px);width:calc(${100 / o.n}% - 4px)">
+        <b>${o.linked ? '⇄ ' : ''}${label}</b><span>${o.st < W0 ? '…' : ''}${hmOf(o.st)}–${hmOf(o.en)}${o.en > W1 ? '…' : ''} · ${dur}${o.focus ? ' · ★' + o.focus : ''}</span></div>`;
+    }).join('');
+    return gapHtml + blocks;
+  }
+  function dayTimelineCard(d) {
+    const W0 = parseYmd(d).getTime(), isToday = d === todayStr(), tlh = 40;
+    const raw = actualRaw(W0);
+    const head = `<h2>Your day <small>${isToday ? 'actual · today' : 'actual · ' + fmtShort(d)}</small></h2>`;
+    if (!raw.length) return `<div class="card">${head}<div class="note">Everything you log shows up here, hour by hour, including sleep and breaks.</div></div>`;
+    const minS = Math.max(0, Math.min(...raw.map((o) => (Math.max(o.st, W0) - W0) / 60000)));
+    let maxE = Math.min(1440, Math.max(...raw.map((o) => (Math.min(o.en, W0 + 86400000) - W0) / 60000)));
+    if (isToday) maxE = Math.max(maxE, Math.min(1440, (Date.now() - W0) / 60000));
+    const from = Math.floor(minS / 60) * 60, to = Math.min(1440, Math.ceil((maxE + 15) / 60) * 60);
+    let hours = '';
+    for (let i = 0; i <= (to - from) / 60; i++) hours += `<div class="tl-hour" style="top:${i * tlh}px"><span>${pad((from / 60 + i) % 24)}:00</span></div>`;
+    let now = '';
+    if (isToday) { const m = (Date.now() - W0) / 60000; if (m >= from && m <= to) now = `<div class="tl-now" style="top:${(m - from) / 60 * tlh}px"></div>`; }
+    return `<div class="card">${head}<div class="tl compact actual" style="height:${Math.max(120, (to - from) / 60 * tlh)}px">${hours}<div class="tl-lane actual">${actualBlocksHtml(raw, W0, from, tlh)}</div>${now}</div></div>`;
   }
 
   // =====================================================================
@@ -866,19 +972,13 @@
         <div class="stack">
           <div class="card">${timerCard()}</div>
           ${upNextCard()}
+          ${dayTimelineCard(d)}
         </div>
         <div class="stack">
           <div class="card">
             <h2>Summary <small>${list.length} ${list.length === 1 ? 'entry' : 'entries'}</small></h2>
-            <div class="tiles">
-              <div class="tile"><div class="k">${typeDot('study')}Study</div><div class="v">${short(tot.study)}</div></div>
-              <div class="tile"><div class="k">${typeDot('break')}Break</div><div class="v">${short(tot.break + ds.gapBreak)}</div>${ds.gapBreak ? `<div class="s">incl. ${short(ds.gapBreak)} gaps</div>` : ''}</div>
-              <div class="tile"><div class="k">${typeDot('other')}Other</div><div class="v">${short(tot.neutral)}</div></div>
-            </div>
-            <div class="goal">
-              <div class="gl"><span>Daily study goal</span><span>${short(tot.study)} / ${short(goal)}</span></div>
-              <div class="bar"><i style="width:${pct}%"></i></div>
-            </div>
+            ${donutCard(list, ds)}
+            ${goalBox(tot.study, goal)}
             ${sleepLine(d, ds)}
             ${restLine(d)}
           </div>
@@ -1094,6 +1194,7 @@
 
   function pageProgress() {
     const p = ui.prog, r = rangeOf();
+    const wr = p.mode === 'week' ? weekReview(r.from) : null;
     const all = live(data.sessions).filter((s) => s.date >= r.from && s.date <= r.to);
     const tot = totals(all);
     const nDays = daysBetween(r.from, r.to);
@@ -1129,14 +1230,16 @@
       <div class="page-head"><div><h1>Progress</h1><p class="sub">${r.label} · ${nDays} ${nDays === 1 ? 'day' : 'days'}</p></div></div>
       ${controls}
       <div class="stack">
+        ${wr ? wr.summary : ''}
         <div class="tiles six">
-          <div class="tile"><div class="k">Total study</div><div class="v">${short(tot.study)}</div><div class="s">${(tot.study / 3600).toFixed(1)} hours</div></div>
+          <div class="tile"><div class="k">Total study</div><div class="v">${short(tot.study)}</div><div class="s">${wr ? wr.delta : (tot.study / 3600).toFixed(1) + ' hours'}</div></div>
           <div class="tile"><div class="k">Daily average</div><div class="v">${short(tot.study / elapsedDays)}</div><div class="s">over ${elapsedDays} ${elapsedDays === 1 ? 'day' : 'days'}</div></div>
           <div class="tile"><div class="k">Active days</div><div class="v">${activeDays}<span style="font-size:14px;color:var(--muted)"> / ${nDays}</span></div><div class="s">days with study</div></div>
           <div class="tile"><div class="k">Best day</div><div class="v">${best && best.sec ? short(best.sec) : '–'}</div><div class="s">${best && best.sec ? fmtShort(best.d) : 'no data yet'}</div></div>
           <div class="tile"><div class="k">Breaks</div><div class="v">${short(tot.break)}</div><div class="s">${tot.study ? Math.round(tot.break / tot.study * 100) + '% of study' : '–'}</div></div>
           ${adhTile(r)}
           <div class="tile"><div class="k">Avg sleep</div><div class="v">${sleepNights ? short(tot.sleep / sleepNights) : '–'}</div><div class="s">${sleepNights ? 'over ' + sleepNights + (sleepNights === 1 ? ' night' : ' nights') : 'no sleep logged'}</div></div>
+          ${wr ? wr.extraTiles : ''}
           ${rated.length ? `<div class="tile"><div class="k">Avg focus</div><div class="v">${avgFocus.toFixed(1)}<span style="font-size:14px;color:var(--muted)"> / 5</span></div><div class="s">${rated.length} rated</div></div>` : ''}
           <div class="tile"><div class="k">Streak</div><div class="v">${streak()}<span style="font-size:14px;color:var(--muted)"> ${streak() === 1 ? 'day' : 'days'}</span></div><div class="s">current</div></div>
         </div>
@@ -1155,6 +1258,7 @@
           <div class="card"><h2>By topic <small>study + other</small></h2>${topicBreakdown(all)}</div>
           <div class="card"><h2>By importance <small>study + other</small></h2>${prioBreakdown(all)}<div style="height:18px"></div><h2>Time split</h2>${splitBar(tot)}</div>
         </div>
+        ${wr ? wr.highlights + wr.days : ''}
       </div>`;
   }
 
@@ -1531,6 +1635,7 @@
           </div>
         </div>
         <div class="stack">
+          ${importantCard()}
           <div class="card">
             <h2>Day summary</h2>
             <div class="tiles">
@@ -1560,6 +1665,29 @@
           </div>
         </div>
       </div>`;
+  }
+
+  // ---- "Important topics" note, shown beside the timetable
+  const impItems = () => live(data.important.items).sort((x, y) => (x.order || 0) - (y.order || 0));
+  function importantCard() {
+    const items = impItems();
+    const body = ui.imp.text
+      ? `<textarea id="imp-text" rows="10" placeholder="One topic per line">${esc(items.map((i) => i.text).join('\n'))}</textarea>
+         <div class="imp-add"><button class="btn sm primary" data-action="imp-text-done">Save list</button><button class="btn sm" data-action="imp-text-cancel">Cancel</button></div>`
+      : `<ul class="imp-list">${items.map((i) => `
+           <li class="${i.done ? 'done' : ''}">
+             <input type="checkbox" data-change="imp-done" data-id="${i.id}" ${i.done ? 'checked' : ''} aria-label="Covered">
+             <input class="imp-item" data-bind="imp-item" data-id="${i.id}" value="${esc(i.text)}" aria-label="Topic">
+             <button class="imp-x" data-action="imp-del" data-id="${i.id}" aria-label="Remove topic">×</button>
+           </li>`).join('')}</ul>
+         ${items.length ? '' : '<p class="note imp-empty">Keep the topics you must not forget here: weak areas, formulas to revise, subjects to finish this week.</p>'}
+         <div class="imp-add"><input id="imp-new" type="text" placeholder="Add a topic…" autocomplete="off"><button class="btn sm primary" data-action="imp-add">Add</button></div>
+         <div class="imp-foot"><button class="linkbtn" data-action="imp-text">Edit as text / paste a list</button>${items.some((i) => i.done) ? '<button class="linkbtn" data-action="imp-clear">Remove ticked</button>' : ''}</div>`;
+    return `<div class="card imp">
+      <div class="imp-bar"><span></span></div>
+      <input class="imp-title" data-bind="imp-title" value="${esc(data.important.title)}" aria-label="Note title">
+      ${body}
+    </div>`;
   }
 
   const TL_H = 56; // pixels per hour on the timeline
@@ -1837,7 +1965,7 @@
     $$('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === ui.page));
     const main = $('#main');
     const keep = main.scrollTop;
-    main.innerHTML = ({ today: pageToday, timetable: pageTimetable, progress: pageProgress, journal: pageJournal, review: pageReview, library: pageLibrary }[ui.page] || pageToday)();
+    main.innerHTML = ({ today: pageToday, timetable: pageTimetable, progress: pageProgress, journal: pageJournal, library: pageLibrary }[ui.page] || pageToday)();
     main.scrollTop = keep;
     if (ui.page === 'timetable' && ui.tt.scrollNow) {
       ui.tt.scrollNow = false;
@@ -2011,6 +2139,35 @@
       const t = live(data.templates).find((x) => x.id === el.dataset.id);
       if (t) softDelete(t, `Deleted template "${t.name}"`);
     },
+    // --- important topics
+    'imp-add': () => {
+      const el = $('#imp-new'), lines = String((el && el.value) || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      if (!lines.length) { toast('Type a topic first'); return; }
+      let order = Math.max(0, ...data.important.items.map((i) => i.order || 0));
+      lines.forEach((text) => data.important.items.push(touch({ id: uid(), text, done: false, order: ++order })));
+      persist(true); render();
+      const n = $('#imp-new'); if (n) n.focus();
+    },
+    'imp-del': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) softDelete(it, `Removed "${it.text}"`); },
+    'imp-clear': () => {
+      const done = impItems().filter((i) => i.done);
+      done.forEach((i) => { i.deleted = true; touch(i); });
+      persist(true); render();
+      toast(`Removed ${done.length} ticked ${done.length === 1 ? 'topic' : 'topics'}`, () => { done.forEach((i) => { i.deleted = false; touch(i); }); persist(true); render(); });
+    },
+    'imp-text': () => { ui.imp.text = true; render(); },
+    'imp-text-cancel': () => { ui.imp.text = false; render(); },
+    'imp-text-done': () => {
+      const lines = String(($('#imp-text') || {}).value || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      const pool = impItems();
+      lines.forEach((text, idx) => {
+        const hit = pool.findIndex((i) => i.text === text);
+        if (hit >= 0) { const it = pool.splice(hit, 1)[0]; if (it.order !== idx + 1) { it.order = idx + 1; touch(it); } }
+        else data.important.items.push(touch({ id: uid(), text, done: false, order: idx + 1 }));
+      });
+      pool.forEach((i) => { i.deleted = true; touch(i); }); // lines you removed
+      ui.imp.text = false; persist(true); render();
+    },
     // --- v4
     'toast-undo': () => { const f = toastUndo; toastUndo = null; $('#toast').hidden = true; if (f) f(); },
     'set-focus': (el) => {
@@ -2053,9 +2210,8 @@
       if (ci[k] === v) delete ci[k]; else ci[k] = v;
       ci.updatedAt = Date.now(); data.checkins[d] = ci; persist(true); render();
     },
-    'rv-prev': () => { ui.rv.anchor = addDays(ui.rv.anchor, -7); render(); },
-    'rv-next': () => { ui.rv.anchor = addDays(ui.rv.anchor, 7); render(); },
-    'rv-now': () => { ui.rv.anchor = todayStr(); render(); },
+    'donut-mode': (el) => { ui.donut.mode = el.dataset.v; ui.donut.sel = null; render(); },
+    'donut-pick': (el) => { const i = +el.dataset.i; ui.donut.sel = ui.donut.sel === i ? null : i; render(); },
     'install-now': async () => {
       if (deferredInstall) {
         const ev = deferredInstall; deferredInstall = null;
@@ -2132,6 +2288,8 @@
       if (cnt) cnt.textContent = v.count;
     },
     'f-minutes': (el) => { ui.form.minutes = parseInt(el.value, 10) || 0; },
+    'imp-title': (el) => { data.important.title = el.value; data.important.titleAt = Date.now(); persist(); },
+    'imp-item': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.text = el.value; touch(it); persist(); } },
     'run-comment': (el) => { if (data.timer) { data.timer.comment = el.value; data.timerUpdatedAt = Date.now(); persist(); } },
     journal: (el) => {
       const d = ui.date;
@@ -2148,8 +2306,8 @@
       if (hit) { ui.form.priority = hit.priority; render(); }
     },
     'gap-cap': (el) => { data.settings.gapCapMin = Math.min(720, Math.max(10, parseInt(el.value, 10) || 120)); touch(data.settings); persist(true); render(); toast('Updated'); },
-    'rv-anchor': (el) => { if (el.value) { ui.rv.anchor = el.value; render(); } },
     'rest-limit': (el) => { data.settings.restPerWeek = Math.min(7, Math.max(0, parseInt(el.value, 10) || 0)); touch(data.settings); persist(true); toast('Updated'); },
+    'imp-done': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.done = !!el.checked; touch(it); persist(true); render(); } },
     'ask-focus': (el) => { data.settings.askFocus = !!el.checked; touch(data.settings); persist(true); },
     sound: (el) => { data.settings.sound = !!el.checked; touch(data.settings); persist(true); if (el.checked) ting(); },
     'tt-date': (el) => { if (el.value) { ui.tt.date = el.value; render(); } },
@@ -2185,6 +2343,6 @@
     if (sync.token) runSync();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { get data() { return data; }, ui, render, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
+    window.__st = { get data() { return data; }, ui, render, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();
