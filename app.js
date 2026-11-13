@@ -106,6 +106,9 @@
       deviceId: uid(),
       topics: [],
       subjects: [],
+      rewards: [],
+      redemptions: [],
+      pointsCfg: { updatedAt: 0, startDate: todayStr(), penalties: true, v: {} },
       presets: [
         { id: 'preset-pomodoro-25', name: 'Pomodoro 25', topic: '', type: 'study', priority: 'medium', minutes: 25, updatedAt: t },
         { id: 'preset-deep-focus-50', name: 'Deep focus 50', topic: '', type: 'study', priority: 'high', minutes: 50, updatedAt: t },
@@ -129,7 +132,7 @@
     d = d && typeof d === 'object' ? d : base;
     d.version = 1;
     d.deviceId = d.deviceId || base.deviceId;
-    for (const k of ['topics', 'subjects', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
+    for (const k of ['topics', 'subjects', 'rewards', 'redemptions', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
     if (!d.plans || typeof d.plans !== 'object' || Array.isArray(d.plans)) d.plans = {};
     if (!Array.isArray(d.categories)) d.categories = [];
     BUILTIN_CATS.forEach((b) => { if (!d.categories.some((x) => x.id === b.id)) d.categories.push({ ...b, updatedAt: 0 }); });
@@ -137,6 +140,11 @@
     if (!d.journal || typeof d.journal !== 'object') d.journal = {};
     for (const k of ['rest', 'checkins']) if (!d[k] || typeof d[k] !== 'object' || Array.isArray(d[k])) d[k] = {};
     if (!d.important || typeof d.important !== 'object' || Array.isArray(d.important)) d.important = {};
+    if (!d.pointsCfg || typeof d.pointsCfg !== 'object' || Array.isArray(d.pointsCfg)) d.pointsCfg = { updatedAt: 0 };
+    d.pointsCfg.startDate = d.pointsCfg.startDate || todayStr(); // points start counting the day this version is first opened
+    if (d.pointsCfg.penalties === undefined) d.pointsCfg.penalties = true;
+    if (!d.pointsCfg.v || typeof d.pointsCfg.v !== 'object') d.pointsCfg.v = {};
+    d.pointsCfg.updatedAt = d.pointsCfg.updatedAt || 0;
     d.important.title = d.important.title || 'Main topics';
     d.important.titleAt = d.important.titleAt || 0;
     if (!Array.isArray(d.important.items)) d.important.items = [];
@@ -158,6 +166,11 @@
     const out = normalize(local);
     out.topics = mergeById(out.topics, inc.topics);
     out.subjects = mergeById(out.subjects, inc.subjects);
+    out.rewards = mergeById(out.rewards, inc.rewards);
+    out.redemptions = mergeById(out.redemptions, inc.redemptions);
+    { const x = out.pointsCfg, y = inc.pointsCfg;
+      if ((y.updatedAt || 0) > (x.updatedAt || 0)) out.pointsCfg = y;
+      else if ((y.updatedAt || 0) === (x.updatedAt || 0) && y.startDate < x.startDate) x.startDate = y.startDate; }
     const seen = new Map();
     out.topics.filter((t) => !t.deleted).sort((x, y) => (x.id < y.id ? -1 : 1)).forEach((t) => {
       const k = t.name.toLowerCase();
@@ -199,6 +212,7 @@
     donut: { mode: 'type', sel: null },
     imp: { text: false },
     lib: { org: false, sel: [] },
+    rw: { open: {} },
     form: { type: 'study', topic: '', priority: 'medium', mode: 'stopwatch', minutes: 25 },
     prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr(), incOther: false, open: {} }
   };
@@ -249,7 +263,7 @@
     const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
     try { return JSON.parse(text); } catch { return null; }
   }
-  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
+  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, rewards: d.rewards, redemptions: d.redemptions, pointsCfg: d.pointsCfg, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
 
   async function runSync() {
     if (!sync.token) return;
@@ -629,7 +643,8 @@
   // =====================================================================
   //  v4: undo, focus rating, rest days, check-in, quick add, install help
   // =====================================================================
-  const isRest = (d) => !!(data.rest && data.rest[d] && data.rest[d].on);
+  const boughtRest = (d) => ((data && data.redemptions) || []).some((r) => !r.deleted && r.special === 'rest' && r.date === d);
+  const isRest = (d) => !!(data.rest && data.rest[d] && data.rest[d].on) || boughtRest(d);
   const weekStart = (d) => addDays(d, -((parseYmd(d).getDay() + 6) % 7));
   const MOODS = [['😞', 'Rough'], ['🙁', 'Low'], ['😐', 'Okay'], ['🙂', 'Good'], ['😄', 'Great']];
   const FOCUS_WORDS = ['Scattered', 'Distracted', 'Okay', 'Focused', 'Deep focus'];
@@ -2066,13 +2081,289 @@
   }
 
   // =====================================================================
+  //  REWARDS TAB: points are calculated from your existing data (sessions,
+  //  timetable, check-ins, journal, sleep). Only rewards, redeemed items and
+  //  the point settings are stored.
+  // =====================================================================
+  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, blockH: 30, blockM: 20, blockL: 10, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30 };
+  const PT_LABELS = [
+    ['study30', 'Study, per 30 minutes'], ['workout30', 'Workout, per 30 minutes'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'],
+    ['blockH', 'Study block done: high'], ['blockM', 'Study block done: medium'], ['blockL', 'Study block done: low'],
+    ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
+    ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
+    ['missGoal', 'Missed goal: maximum penalty'], ['missBlock', 'Missed study block'], ['cap', 'Daily penalty cap']
+  ];
+  const LEVELS = [['Beginner', 0], ['Learner', 200], ['Focused', 600], ['Scholar', 1500], ['Master', 3500], ['Legend', 8000]];
+  const ptv = () => Object.assign({}, PT_DEFAULTS, data.pointsCfg.v);
+  const sgn = (n) => (n > 0 ? '+' + n : n < 0 ? '−' + Math.abs(n) : '0');
+
+  const isWorkout = (s) => /workout|exercise|gym|yoga|fitness/i.test(cat(s.type).name + ' ' + s.topic);
+  function computePoints() {
+    const cfg = data.pointsCfg, v = ptv(), today = todayStr(), now = Date.now();
+    const start = cfg.startDate || today, goal = data.settings.dailyGoalMin * 60;
+    const by = {}, actual = {};
+    live(data.sessions).forEach((s) => {
+      (by[s.date] = by[s.date] || []).push(s);
+      if (s.blockId) { const k = s.planDate + '|' + s.blockId; actual[k] = (actual[k] || 0) + s.seconds; }
+    });
+    const tm = data.timer, tmElapsed = tm ? Math.round(elapsedMs(tm) / 1000) : 0;
+    const studyDays = new Set(live(data.sessions).filter((s) => kindOf(s.type) === 'study').map((s) => s.date));
+    const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t]));
+    const subs = live(data.subjects).filter((s) => live(data.topics).some((t) => t.subjectId === s.id));
+    const reds = live(data.redemptions);
+    const redBy = {}; reds.forEach((r) => { (redBy[r.date] = redBy[r.date] || []).push(r); });
+    let first = start;
+    studyDays.forEach((d) => { if (d < first) first = d; });
+    const days = {};
+    let L = 0, A = 0, streakLen = 0, spent = 0, pending = 0;
+    for (let d = first, guard = 0; d <= today && guard < 4000; d = addDays(d, 1), guard++) {
+      const isToday = d === today, finished = !isToday;
+      const list = by[d] || [];
+      let study = list.filter((s) => kindOf(s.type) === 'study').reduce((n, s) => n + s.seconds, 0);
+      if (isToday && tm && kindOf(tm.type) === 'study') study += tmElapsed;
+      const studied = study > 0;
+      streakLen = studied ? streakLen + 1 : (isRest(d) || isToday) ? streakLen : 0;
+      (redBy[d] || []).forEach((r) => { spent += r.cost; });
+      if (d < start) { continue; }
+      const items = [];
+      const add = (label, pts, kind) => { if (pts) items.push({ label, pts, kind }); };
+      add(`Study ${short(study)}`, Math.floor(study / 1800) * v.study30, 'earn');
+      if (goal > 0 && study >= goal) add('Daily goal reached', v.goal, 'earn');
+      let wsec = list.filter((s) => kindOf(s.type) !== 'study' && kindOf(s.type) !== 'sleep' && isWorkout(s)).reduce((n, s) => n + s.seconds, 0);
+      if (isToday && tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isWorkout(tm)) wsec += tmElapsed;
+      const wch = Math.min(v.workoutMax, Math.floor(wsec / 1800));
+      if (wch) add(`Workout ${short(wsec)}`, wch * v.workout30, 'earn');
+      // timetable blocks
+      const plan = resolvePlan(d);
+      let doneH = 0, doneM = 0, doneL = 0, missed = 0;
+      plan.blocks.forEach((b) => {
+        if (kindOf(b.type) !== 'study' || plan.skipped.includes(b.id)) return;
+        const dur = blockDur(b) * 60;
+        let act = actual[d + '|' + b.id] || 0;
+        if (isToday && tm && tm.blockId === b.id && tm.planDate === d) act += tmElapsed;
+        if (dur > 0 && act >= dur * 0.9) { if (b.priority === 'high') doneH++; else if (b.priority === 'low') doneL++; else doneM++; }
+        else if (act === 0 && blockTimes(d, b).endMs < now) missed++;
+      });
+      const nd = doneH + doneM + doneL;
+      if (nd) add(`${nd} study ${nd === 1 ? 'block' : 'blocks'} done`, doneH * v.blockH + doneM * v.blockM + doneL * v.blockL, 'earn');
+      const nf = list.filter((s) => kindOf(s.type) === 'study' && s.focus >= 4 && s.seconds >= 1800).length;
+      if (nf) add(`${nf} focused ${nf === 1 ? 'session' : 'sessions'}`, nf * v.focus, 'earn');
+      const ci = data.checkins[d];
+      if (ci && (ci.mood || ci.focus)) add('Evening check-in', v.checkin, 'earn');
+      if (((data.journal[d] && data.journal[d].text) || '').trim()) add('Journal entry', v.journal, 'earn');
+      if (list.some((s) => kindOf(s.type) === 'sleep')) add('Sleep logged', v.sleep, 'earn');
+      if (studied && (streakLen === 3 || streakLen === 7 || streakLen === 30)) add(`${streakLen}-day streak`, v['streak' + streakLen], 'earn');
+      if (finished && parseYmd(d).getDay() === 0 && subs.length) {
+        const covered = new Set();
+        for (let i = 0; i < 7; i++) (by[addDays(d, -i)] || []).forEach((s) => {
+          if (kindOf(s.type) !== 'study') return;
+          const t = tmap.get(s.topic.toLowerCase()); if (t && t.subjectId) covered.add(t.subjectId);
+        });
+        if (subs.every((s) => covered.has(s.id))) add('Every subject studied this week', v.allSubjects, 'earn');
+      }
+      const earned = items.reduce((n, i) => n + i.pts, 0);
+      // penalties (only for finished days; rest days are protected). Today shows what would apply if it ended now.
+      const pens = [];
+      if (cfg.penalties && !isRest(d)) {
+        if (goal > 0 && study < goal) { const p = Math.round(v.missGoal * (1 - study / goal)); if (p) pens.push({ label: 'Missed daily goal', pts: -p }); }
+        if (missed) pens.push({ label: `${missed} missed ${missed === 1 ? 'block' : 'blocks'}`, pts: -missed * v.missBlock });
+      }
+      const rawPen = pens.reduce((n, p) => n + p.pts, 0), pen = Math.max(rawPen, -v.cap);
+      let penItems = pens.map((p) => ({ ...p, kind: 'pen' }));
+      if (pen !== rawPen) penItems.push({ label: 'Daily penalty cap applied', pts: pen - rawPen, kind: 'cap' });
+      if (finished) {
+        const total = earned + pen;
+        days[d] = { items: [...items, ...penItems], earned, pen, total, finished: true };
+        L = Math.max(0, L + total); A = Math.max(0, A + total);
+      } else {
+        days[d] = { items, earned, pen: 0, total: earned, finished: false, pendingItems: penItems, pendingPen: pen };
+        L = Math.max(0, L + earned); A = Math.max(0, A + earned);
+        pending = pen;
+      }
+      (redBy[d] || []).forEach((r) => { A = Math.max(0, A - r.cost); });
+    }
+    // redemptions made before the start date still count as spent (rare)
+    return { days, L, A, spent, pending, start, today, studyToday: (() => { let s = (by[today] || []).filter((x) => kindOf(x.type) === 'study').reduce((n, x) => n + x.seconds, 0); if (tm && kindOf(tm.type) === 'study') s += tmElapsed; return s; })() };
+  }
+  function levelOf(L) {
+    let i = 0;
+    LEVELS.forEach(([, min], k) => { if (L >= min) i = k; });
+    const cur = LEVELS[i], next = LEVELS[i + 1] || null;
+    return { name: cur[0], idx: i, from: cur[1], next, pct: next ? Math.min(100, (L - cur[1]) / (next[1] - cur[1]) * 100) : 100 };
+  }
+
+  // ---- rewards
+  const LIMITS = { none: 'No limit', twice: 'Twice a day', day: 'Once a day', week: 'Once a week', month: 'Once a month' };
+  const redsOf = (r) => live(data.redemptions).filter((x) => x.rewardId === r.id);
+  function rewardPrice(r) {
+    const today = todayStr(), recent = redsOf(r).filter((x) => x.date >= addDays(today, -6)).length;
+    return Math.max(1, Math.round(r.cost * Math.pow(1 + (r.rise || 0) / 100, recent)));
+  }
+  function rewardState(r, pts) {
+    const price = rewardPrice(r), today = todayStr(), mine = redsOf(r), goal = data.settings.dailyGoalMin * 60;
+    const lim = r.limit || 'none';
+    if (r.special === 'rest' && isRest(today)) return { price, ok: false, why: 'Today is already a rest day' };
+    const inDay = mine.filter((x) => x.date === today).length;
+    const inWeek = mine.filter((x) => weekStart(x.date) === weekStart(today)).length;
+    const inMonth = mine.filter((x) => x.date.slice(0, 7) === today.slice(0, 7)).length;
+    if (lim === 'twice' && inDay >= 2) return { price, ok: false, why: 'Limit reached today (twice a day)' };
+    if (lim === 'day' && inDay >= 1) return { price, ok: false, why: 'Limit reached today (once a day)' };
+    if (lim === 'week' && inWeek >= 1) return { price, ok: false, why: 'Limit reached this week (once a week)' };
+    if (lim === 'month' && inMonth >= 1) return { price, ok: false, why: 'Limit reached this month (once a month)' };
+    if (r.needsGoal && goal > 0 && pts.studyToday < goal) return { price, ok: false, why: `Reach today's goal first (${short(Math.max(0, goal - pts.studyToday))} to go)` };
+    if (pts.A < price) return { price, ok: false, why: `${price - pts.A} more points needed` };
+    return { price, ok: true, why: '' };
+  }
+  const SUGGESTED_REWARDS = [
+    ['Rest day (streak safe, no penalties)', 400, 'week', false, 'rest'],
+    ['Chai or snack', 60, 'twice', false], ['Favourite song break', 60, 'twice', false], ['20 minutes of social media', 80, 'twice', true],
+    ['30-minute sleep-in', 150, 'week', true], ['1 hour of gaming or a show', 200, 'day', true], ['Order a favourite meal', 250, 'week', true],
+    ['New book or stationery', 600, 'month', false], ['Movie', 700, 'week', true], ['Dinner out', 900, 'week', true],
+    ['Half-day off', 3000, 'month', false], ['Day trip (big goal)', 4000, 'month', false]
+  ];
+  function rewardModal(existing) {
+    const r = existing || { name: '', cost: 100, limit: 'none', needsGoal: false, rise: 0 };
+    openModal(existing ? 'Edit reward' : 'New reward', `
+      <div class="field"><label>Reward</label><input type="text" id="rw-name" value="${esc(r.name)}" placeholder="e.g. Movie night"></div>
+      <div class="row">
+        <div class="field grow"><label>Cost (points)</label><input type="number" id="rw-cost" min="1" step="10" value="${r.cost}"></div>
+        <div class="field grow"><label>Limit</label><select id="rw-limit">${Object.entries(LIMITS).map(([k, l]) => `<option value="${k}" ${(r.limit || 'none') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      </div>
+      <div class="row">
+        <div class="field grow"><label>Type</label><select id="rw-special"><option value="" ${!r.special ? 'selected' : ''}>Normal reward</option><option value="rest" ${r.special === 'rest' ? 'selected' : ''}>Rest day (protects today)</option></select></div>
+        <div class="field grow"><label>Unlock</label><select id="rw-goal"><option value="0" ${!r.needsGoal ? 'selected' : ''}>Any time</option><option value="1" ${r.needsGoal ? 'selected' : ''}>Only after today's goal</option></select></div>
+        <div class="field grow"><label>Price rise per use (%)</label><input type="number" id="rw-rise" min="0" max="200" step="5" value="${r.rise || 0}"></div>
+      </div>
+      <p class="note">The price rise applies for each time you redeemed it in the last 7 days, so a snack cannot become an everyday habit.</p>`, () => {
+      const name = $('#rw-name').value.trim(), cost = parseInt($('#rw-cost').value, 10);
+      if (!name) { toast('Give the reward a name'); return false; }
+      if (!(cost >= 1)) { toast('Enter a cost of at least 1 point'); return false; }
+      const rec = existing || { id: uid() };
+      Object.assign(rec, { name, cost, limit: $('#rw-limit').value, needsGoal: $('#rw-goal').value === '1', rise: Math.max(0, parseFloat($('#rw-rise').value) || 0) });
+      if ($('#rw-special').value) rec.special = $('#rw-special').value; else delete rec.special;
+      touch(rec);
+      if (!existing) data.rewards.push(rec);
+      persist(true); render();
+    });
+  }
+
+  function ptChart(pts) {
+    const today = todayStr(), n = 14, vals = [];
+    for (let i = n - 1; i >= 0; i--) { const d = addDays(today, -i), x = pts.days[d]; vals.push({ d, total: x ? x.total : 0, has: !!x }); }
+    const narrow = window.innerWidth <= 760, W = narrow ? 400 : 820, H = 200, L = 44, R = 6, T = 14, B = 26;
+    const mx = Math.max(10, ...vals.map((x) => x.total)), mn = Math.min(0, ...vals.map((x) => x.total));
+    const span = mx - mn, ih = H - T - B, y = (v) => T + (mx - v) / span * ih, slot = (W - L - R) / n, bw = Math.min(30, slot * 0.62);
+    let g = '';
+    for (let i = 0; i <= 4; i++) { const v = mn + span * i / 4, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 6}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${Math.round(v)}</text>`; }
+    g += `<line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="#94a3b8"/>`;
+    vals.forEach((x, i) => {
+      const cx = L + slot * i + (slot - bw) / 2, y0 = y(0), y1 = y(x.total);
+      if (x.has && x.total !== 0) g += `<rect x="${cx}" y="${Math.min(y0, y1)}" width="${bw}" height="${Math.max(1.5, Math.abs(y1 - y0))}" rx="3" fill="${x.total >= 0 ? '#2563eb' : '#e11d48'}"><title>${fmtShort(x.d)}: ${sgn(x.total)} points</title></rect>`;
+      if (i % (narrow ? 2 : 1) === 0) g += `<text x="${cx + bw / 2}" y="${H - 8}" text-anchor="middle" font-size="11" fill="#64748b">${parseYmd(x.d).getDate()}</text>`;
+    });
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Points per day">${g}</svg>`;
+  }
+  const itemRows = (items) => items.map((i) => `<div class="pt-row ${i.kind}"><span>${esc(i.label)}</span><b>${sgn(i.pts)}</b></div>`).join('');
+
+  function pageRewards() {
+    const pts = computePoints(), v = ptv(), today = pts.today, lv = levelOf(pts.L), cfg = data.pointsCfg;
+    const td = pts.days[today];
+    const rewards = live(data.rewards).sort((x, y) => x.cost - y.cost);
+    const wk = (from) => { let s = 0; for (let i = 0; i < 7; i++) { const x = pts.days[addDays(from, i)]; if (x) s += x.total; } return s; };
+    const thisWk = weekStart(today), lastWk = addDays(thisWk, -7);
+    const recent = Array.from({ length: 14 }, (_, i) => addDays(today, -(i + 1))).filter((d) => pts.days[d]);
+    const hist = live(data.redemptions).sort((x, y) => (y.date > x.date ? 1 : y.date < x.date ? -1 : (y.updatedAt || 0) - (x.updatedAt || 0))).slice(0, 10);
+
+    const header = `
+      <div class="card pt-hero">
+        <div class="pt-big"><div class="lbl">Available points</div><div class="num">${pts.A.toLocaleString('en-IN')}</div>
+          <div class="note">Lifetime score ${pts.L.toLocaleString('en-IN')} · spent ${pts.spent.toLocaleString('en-IN')} on rewards</div></div>
+        <div class="pt-level">
+          <div class="lvname"><span class="lbl">Level</span><b>${lv.name}</b></div>
+          <div class="bar"><i style="width:${lv.pct}%"></i></div>
+          <div class="note">${lv.next ? `${(lv.next[1] - pts.L).toLocaleString('en-IN')} points to ${lv.next[0]}` : 'Top level reached'}</div>
+          <div class="lv-chips">${LEVELS.map(([n, m], i) => `<span class="${i === lv.idx ? 'on' : i < lv.idx ? 'past' : ''}" title="${m} points">${n}</span>`).join('')}</div>
+        </div>
+      </div>`;
+
+    const todayCard = `
+      <div class="card"><h2>Today <small>${fmtShort(today)}</small></h2>
+        ${!td ? `<div class="note">Points start counting on <b>${fmtShort(pts.start)}</b>. You can change this in the settings below.</div>`
+          : `${td.items.length ? itemRows(td.items) : '<div class="note">Nothing earned yet. Start a timer to get going.</div>'}
+             <div class="pt-row tot"><span>Earned today</span><b>${sgn(td.earned)}</b></div>
+             ${td.pendingItems && td.pendingItems.length ? `<div class="pt-pending"><div class="lbl">If the day ended now</div>${itemRows(td.pendingItems)}<div class="note">Penalties are only applied when the day ends. Reach your goal and complete your blocks to avoid them.</div></div>` : ''}`}
+      </div>`;
+
+    const chart = `
+      <div class="card"><h2>Last 14 days <small>points per day</small></h2>
+        <div class="chart-wrap">${ptChart(pts)}</div>
+        <div class="pt-weeks"><div><span class="lbl">This week</span><b>${sgn(wk(thisWk))}</b></div><div><span class="lbl">Last week</span><b>${sgn(wk(lastWk))}</b></div></div>
+      </div>`;
+
+    const rcard = (r) => {
+      const st = rewardState(r, pts), pct = Math.min(100, pts.A / st.price * 100);
+      const rise = r.rise && st.price !== r.cost ? ` <span class="note">(base ${r.cost})</span>` : '';
+      return `<div class="rw-card ${st.ok ? 'ready' : ''}">
+        <div class="rw-top"><b>${esc(r.name)}</b><span class="rw-cost">${st.price.toLocaleString('en-IN')} pts${rise}</span></div>
+        <div class="rw-meta">${LIMITS[r.limit || 'none']}${r.special === 'rest' ? ' · protects your streak, no penalties' : ''}${r.needsGoal ? ' · after today’s goal' : ''}${r.rise ? ` · +${r.rise}% per use` : ''}</div>
+        <div class="bar"><i style="width:${pct}%"></i></div>
+        <div class="rw-act">
+          <button class="btn sm primary" data-action="rw-redeem" data-id="${r.id}" ${st.ok ? '' : 'disabled'}>Redeem</button>
+          <button class="btn sm" data-action="rw-edit" data-id="${r.id}">Edit</button>
+          <button class="btn sm danger" data-action="rw-del" data-id="${r.id}">Delete</button>
+        </div>
+        ${st.ok ? '' : `<div class="rw-why">${esc(st.why)}</div>`}
+      </div>`;
+    };
+    const shop = `
+      <div class="card"><h2>Rewards <button class="btn sm primary" data-action="rw-add">+ New reward</button></h2>
+        ${rewards.length ? `<div class="rw-grid">${rewards.map(rcard).join('')}</div>`
+          : `<div class="empty"><b>No rewards yet</b>Add things you would enjoy and set what they cost.
+              <div style="margin-top:12px"><button class="btn sm" data-action="rw-suggest">Add suggested rewards</button></div></div>`}
+      </div>`;
+
+    const history = `
+      <div class="card"><h2>Redeemed <small>latest 10</small></h2>
+        ${hist.length ? hist.map((x) => `<div class="list-row"><div class="grow"><div class="nm">${esc(x.name)}</div><div class="meta">${fmtShort(x.date)}</div></div><b class="neg">−${x.cost}</b><button class="btn sm" data-action="rd-undo" data-id="${x.id}">Undo</button></div>`).join('')
+          : '<div class="note">Nothing redeemed yet.</div>'}
+      </div>`;
+
+    const days = `
+      <div class="card"><h2>Recent days <small>tap a day for the breakdown</small></h2>
+        ${recent.length ? recent.map((d) => { const x = pts.days[d], open = !!ui.rw.open[d]; return `
+          <div class="pd ${open ? 'open' : ''}"><div class="pd-head" data-action="pt-open" data-date="${d}"><span class="caret">›</span><span class="grow">${fmtDow(d)}, ${fmtShort(d)}${isRest(d) ? ' <span class="pill rest">Rest</span>' : ''}</span><b class="${x.total < 0 ? 'neg' : 'pos'}">${sgn(x.total)}</b></div>
+          ${open ? `<div class="pd-body">${x.items.length ? itemRows(x.items) : '<div class="note">Nothing earned or lost.</div>'}</div>` : ''}</div>`; }).join('')
+          : '<div class="note">Finished days will appear here.</div>'}
+      </div>`;
+
+    const settings = `
+      <div class="card"><h2>Points settings</h2>
+        <div class="field"><label>Count points from</label><input type="date" data-change="pt-start" value="${cfg.startDate}"></div>
+        <div class="field"><label class="chk"><input type="checkbox" data-change="pt-pen" ${cfg.penalties ? 'checked' : ''}> Deduct points for missed goals and blocks</label></div>
+        <div class="pt-grid">${PT_LABELS.map(([k, l]) => `<label class="pt-set"><span>${l}</span><input type="number" min="0" step="1" data-change="pt-val" data-key="${k}" value="${v[k]}"></label>`).join('')}</div>
+        <div class="row" style="margin-top:12px"><button class="btn" data-action="pt-reset">Reset to defaults</button></div>
+        <p class="note" style="margin-top:12px">Changing a value recalculates your whole history. Rest days (including ones you buy), skipped blocks, sleep and untracked gaps never cost points, and your score never goes below zero.</p>
+      </div>`;
+
+    return `
+      <div class="page-head"><div><h1>Rewards</h1><p class="sub">Earn points for studying, spend them on rewards you choose</p></div></div>
+      <div class="stack">
+        ${header}
+        <div class="grid">
+          <div class="stack">${shop}${history}</div>
+          <div class="stack">${todayCard}${chart}${days}${settings}</div>
+        </div>
+      </div>`;
+  }
+
+  // =====================================================================
   //  RENDER + EVENTS
   // =====================================================================
   function render() {
     $$('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === ui.page));
     const main = $('#main');
     const keep = main.scrollTop;
-    main.innerHTML = ({ today: pageToday, timetable: pageTimetable, progress: pageProgress, journal: pageJournal, library: pageLibrary }[ui.page] || pageToday)();
+    main.innerHTML = ({ today: pageToday, timetable: pageTimetable, progress: pageProgress, journal: pageJournal, rewards: pageRewards, library: pageLibrary }[ui.page] || pageToday)();
     main.scrollTop = keep;
     if (ui.page === 'timetable' && ui.tt.scrollNow) {
       ui.tt.scrollNow = false;
@@ -2246,6 +2537,28 @@
       const t = live(data.templates).find((x) => x.id === el.dataset.id);
       if (t) softDelete(t, `Deleted template "${t.name}"`);
     },
+    // --- rewards
+    'rw-add': () => rewardModal(null),
+    'rw-edit': (el) => { const r = live(data.rewards).find((x) => x.id === el.dataset.id); if (r) rewardModal(r); },
+    'rw-del': (el) => { const r = live(data.rewards).find((x) => x.id === el.dataset.id); if (r) softDelete(r, `Deleted reward "${r.name}"`); },
+    'rw-suggest': () => {
+      SUGGESTED_REWARDS.forEach(([name, cost, limit, needsGoal, special]) => data.rewards.push(touch({ id: uid(), name, cost, limit, needsGoal, rise: 0, ...(special ? { special } : {}) })));
+      persist(true); render(); toast('Rewards added. Edit the costs to suit you');
+    },
+    'rw-redeem': (el) => {
+      const r = live(data.rewards).find((x) => x.id === el.dataset.id); if (!r) return;
+      const pts = computePoints(), st = rewardState(r, pts);
+      if (!st.ok) { toast(st.why); return; }
+      const rec = touch({ id: uid(), rewardId: r.id, name: r.name, cost: st.price, date: todayStr(), ...(r.special ? { special: r.special } : {}) });
+      data.redemptions.push(rec); persist(true); render();
+      toast(r.special === 'rest' ? `Rest day unlocked for ${st.price} points. Today is protected` : `Redeemed "${r.name}" for ${st.price} points`, () => { rec.deleted = true; touch(rec); persist(true); render(); });
+    },
+    'rd-undo': (el) => { const x = live(data.redemptions).find((r) => r.id === el.dataset.id); if (x) softDelete(x, `Returned ${x.cost} points for "${x.name}"`); },
+    'pt-open': (el) => { ui.rw.open[el.dataset.date] = !ui.rw.open[el.dataset.date]; render(); },
+    'pt-reset': () => {
+      if (!confirm('Reset all point values to the defaults?')) return;
+      data.pointsCfg.v = {}; touch(data.pointsCfg); persist(true); render(); toast('Point values reset');
+    },
     // --- subjects
     'subj-add': () => subjectModal(null),
     'subj-edit': (el) => { const s = live(data.subjects).find((x) => x.id === el.dataset.id); if (s) subjectModal(s); },
@@ -2324,6 +2637,7 @@
     },
     'rest-toggle': (el) => {
       const d = el.dataset.date, on = !isRest(d);
+      if (boughtRest(d)) { toast('This rest day was bought with points. Undo it in Rewards to remove it'); return; }
       if (on) {
         const wk = weekStart(d), lim = data.settings.restPerWeek ?? 1;
         let used = 0;
@@ -2435,6 +2749,9 @@
     },
     'gap-cap': (el) => { data.settings.gapCapMin = Math.min(720, Math.max(10, parseInt(el.value, 10) || 120)); touch(data.settings); persist(true); render(); toast('Updated'); },
     'rest-limit': (el) => { data.settings.restPerWeek = Math.min(7, Math.max(0, parseInt(el.value, 10) || 0)); touch(data.settings); persist(true); toast('Updated'); },
+    'pt-val': (el) => { const k = el.dataset.key; if (!(k in PT_DEFAULTS)) return; data.pointsCfg.v[k] = Math.max(0, parseFloat(el.value) || 0); touch(data.pointsCfg); persist(true); render(); },
+    'pt-pen': (el) => { data.pointsCfg.penalties = !!el.checked; touch(data.pointsCfg); persist(true); render(); },
+    'pt-start': (el) => { if (el.value) { data.pointsCfg.startDate = el.value; touch(data.pointsCfg); persist(true); render(); } },
     'topic-subject': (el) => { const t = data.topics.find((x) => x.id === el.dataset.id); if (t) { if (el.value) t.subjectId = el.value; else delete t.subjectId; touch(t); persist(true); render(); } },
     'imp-done': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.done = !!el.checked; touch(it); persist(true); render(); } },
     'ask-focus': (el) => { data.settings.askFocus = !!el.checked; touch(data.settings); persist(true); },
@@ -2472,6 +2789,6 @@
     if (sync.token) runSync();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { get data() { return data; }, ui, render, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
+    window.__st = { get data() { return data; }, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();
