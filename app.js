@@ -108,7 +108,8 @@
       subjects: [],
       rewards: [],
       redemptions: [],
-      pointsCfg: { updatedAt: 0, startDate: todayStr(), penalties: true, v: {} },
+      pointsCfg: { updatedAt: 0, startDate: todayStr(), penalties: true, v: {}, lockUntil: 0 },
+      pointsLog: [],
       presets: [
         { id: 'preset-pomodoro-25', name: 'Pomodoro 25', topic: '', type: 'study', priority: 'medium', minutes: 25, updatedAt: t },
         { id: 'preset-deep-focus-50', name: 'Deep focus 50', topic: '', type: 'study', priority: 'high', minutes: 50, updatedAt: t },
@@ -132,7 +133,7 @@
     d = d && typeof d === 'object' ? d : base;
     d.version = 1;
     d.deviceId = d.deviceId || base.deviceId;
-    for (const k of ['topics', 'subjects', 'rewards', 'redemptions', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
+    for (const k of ['topics', 'subjects', 'rewards', 'redemptions', 'pointsLog', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
     if (!d.plans || typeof d.plans !== 'object' || Array.isArray(d.plans)) d.plans = {};
     if (!Array.isArray(d.categories)) d.categories = [];
     BUILTIN_CATS.forEach((b) => { if (!d.categories.some((x) => x.id === b.id)) d.categories.push({ ...b, updatedAt: 0 }); });
@@ -145,6 +146,7 @@
     if (d.pointsCfg.penalties === undefined) d.pointsCfg.penalties = true;
     if (!d.pointsCfg.v || typeof d.pointsCfg.v !== 'object') d.pointsCfg.v = {};
     d.pointsCfg.updatedAt = d.pointsCfg.updatedAt || 0;
+    d.pointsCfg.lockUntil = d.pointsCfg.lockUntil || 0;
     d.important.title = d.important.title || 'Main topics';
     d.important.titleAt = d.important.titleAt || 0;
     if (!Array.isArray(d.important.items)) d.important.items = [];
@@ -168,9 +170,11 @@
     out.subjects = mergeById(out.subjects, inc.subjects);
     out.rewards = mergeById(out.rewards, inc.rewards);
     out.redemptions = mergeById(out.redemptions, inc.redemptions);
-    { const x = out.pointsCfg, y = inc.pointsCfg;
+    out.pointsLog = mergeById(out.pointsLog, inc.pointsLog);
+    { const x = out.pointsCfg, y = inc.pointsCfg, lk = Math.max(x.lockUntil || 0, y.lockUntil || 0);
       if ((y.updatedAt || 0) > (x.updatedAt || 0)) out.pointsCfg = y;
-      else if ((y.updatedAt || 0) === (x.updatedAt || 0) && y.startDate < x.startDate) x.startDate = y.startDate; }
+      else if ((y.updatedAt || 0) === (x.updatedAt || 0) && y.startDate < x.startDate) x.startDate = y.startDate;
+      out.pointsCfg.lockUntil = lk; } // a lock set on any device holds on all of them
     const seen = new Map();
     out.topics.filter((t) => !t.deleted).sort((x, y) => (x.id < y.id ? -1 : 1)).forEach((t) => {
       const k = t.name.toLowerCase();
@@ -212,7 +216,7 @@
     donut: { mode: 'type', sel: null },
     imp: { text: false },
     lib: { org: false, sel: [] },
-    rw: { open: {} },
+    rw: { open: {}, logAll: false },
     form: { type: 'study', topic: '', priority: 'medium', mode: 'stopwatch', minutes: 25 },
     prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr(), incOther: false, open: {} }
   };
@@ -263,7 +267,7 @@
     const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
     try { return JSON.parse(text); } catch { return null; }
   }
-  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, rewards: d.rewards, redemptions: d.redemptions, pointsCfg: d.pointsCfg, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
+  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, rewards: d.rewards, redemptions: d.redemptions, pointsCfg: d.pointsCfg, pointsLog: d.pointsLog, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
 
   async function runSync() {
     if (!sync.token) return;
@@ -666,9 +670,8 @@
   }
 
   function restLine(d) {
-    const on = isRest(d);
-    return `<div class="restline">${on ? '<span class="pill rest">Rest day</span><span class="note">Your streak is safe.</span>' : '<span class="note">Need a day off?</span>'}
-      <button class="linkbtn" data-action="rest-toggle" data-date="${d}">${on ? 'Remove' : 'Mark as rest day'}</button></div>`;
+    if (!isRest(d)) return '';
+    return `<div class="restline"><span class="pill rest">Rest day</span><span class="note">${boughtRest(d) ? 'Bought with points. ' : ''}Your streak is safe.</span></div>`;
   }
 
   function checkinCard(d) {
@@ -1526,8 +1529,6 @@
               <input type="number" min="0" max="1440" step="15" data-change="goal" value="${data.settings.dailyGoalMin}"></div>
             <div class="field"><label>Longest gap counted as break (minutes)</label>
               <input type="number" min="10" max="720" step="10" data-change="gap-cap" value="${gapCapMin()}"></div>
-            <div class="field"><label>Rest days allowed per week</label>
-              <input type="number" min="0" max="7" step="1" data-change="rest-limit" value="${data.settings.restPerWeek ?? 1}"></div>
             <div class="field"><label class="chk"><input type="checkbox" data-change="ask-focus" ${data.settings.askFocus !== false ? 'checked' : ''}> Ask for a focus rating when I stop a timer</label></div>
             <div class="field"><label class="chk"><input type="checkbox" data-change="sound" ${data.settings.sound !== false ? 'checked' : ''}> Play a soft bell when a countdown ends</label>
               <div><button class="btn sm" data-action="sound-test">Play sound</button></div></div>
@@ -2095,6 +2096,11 @@
   ];
   const LEVELS = [['Beginner', 0], ['Learner', 200], ['Focused', 600], ['Scholar', 1500], ['Master', 3500], ['Legend', 8000]];
   const ptv = () => Object.assign({}, PT_DEFAULTS, data.pointsCfg.v);
+  const LOCK_DAYS = 7;
+  const ptLocked = () => (data.pointsCfg.lockUntil || 0) > Date.now();
+  const lockWhen = () => { const d = new Date(data.pointsCfg.lockUntil); return `${fmtLong(ymd(d))}, ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`; };
+  const lockMsg = () => `Locked until ${lockWhen()}. Points and prices cannot be changed yet`;
+  function ptLog(text) { const at = Date.now(); data.pointsLog.push({ id: uid(), at, text, updatedAt: at }); }
   const sgn = (n) => (n > 0 ? '+' + n : n < 0 ? '−' + Math.abs(n) : '0');
 
   const isWorkout = (s) => /workout|exercise|gym|yoga|fitness/i.test(cat(s.type).name + ' ' + s.topic);
@@ -2239,12 +2245,29 @@
       if (!name) { toast('Give the reward a name'); return false; }
       if (!(cost >= 1)) { toast('Enter a cost of at least 1 point'); return false; }
       const rec = existing || { id: uid() };
-      Object.assign(rec, { name, cost, limit: $('#rw-limit').value, needsGoal: $('#rw-goal').value === '1', rise: Math.max(0, parseFloat($('#rw-rise').value) || 0) });
-      if ($('#rw-special').value) rec.special = $('#rw-special').value; else delete rec.special;
+      const nv = { name, cost, limit: $('#rw-limit').value, needsGoal: $('#rw-goal').value === '1', rise: Math.max(0, parseFloat($('#rw-rise').value) || 0), special: $('#rw-special').value };
+      const old = existing ? { cost: rec.cost, limit: rec.limit || 'none', needsGoal: !!rec.needsGoal, rise: rec.rise || 0, special: rec.special || '' } : null;
+      if (existing && ptLocked()) Object.assign(nv, old); // cost and rules stay as they were while locked
+      Object.assign(rec, { name: nv.name, cost: nv.cost, limit: nv.limit, needsGoal: nv.needsGoal, rise: nv.rise });
+      if (nv.special) rec.special = nv.special; else delete rec.special;
+      if (!existing) ptLog(`Added reward "${nv.name}" (${nv.cost} points)`);
+      else {
+        const ch = [];
+        if (old.cost !== nv.cost) ch.push(`cost ${old.cost} → ${nv.cost}`);
+        if (old.limit !== nv.limit) ch.push(`limit ${LIMITS[old.limit]} → ${LIMITS[nv.limit]}`);
+        if (old.needsGoal !== nv.needsGoal) ch.push(nv.needsGoal ? 'now needs the daily goal' : 'no longer needs the daily goal');
+        if (old.rise !== nv.rise) ch.push(`price rise ${old.rise}% → ${nv.rise}%`);
+        if (old.special !== nv.special) ch.push(nv.special ? 'set as a rest-day reward' : 'no longer a rest-day reward');
+        if (ch.length) ptLog(`Reward "${nv.name}": ${ch.join(', ')}`);
+      }
       touch(rec);
       if (!existing) data.rewards.push(rec);
       persist(true); render();
     });
+    if (existing && ptLocked()) {
+      ['#rw-cost', '#rw-limit', '#rw-goal', '#rw-rise', '#rw-special'].forEach((s) => { const e = $(s); if (e) e.disabled = true; });
+      $('#modal-body').insertAdjacentHTML('beforeend', `<p class="note">Cost and rules are locked until ${esc(lockWhen())}. You can still rename it.</p>`);
+    }
   }
 
   function ptChart(pts) {
@@ -2336,12 +2359,26 @@
           : '<div class="note">Finished days will appear here.</div>'}
       </div>`;
 
+    const locked = ptLocked(), dis = locked ? 'disabled' : '';
+    const lockBox = locked
+      ? `<div class="pt-lock on"><b>Locked</b> until ${esc(lockWhen())}. Point values, prices and reward rules cannot be changed until then.</div>`
+      : `<div class="pt-lock"><div>Tuned your points? Lock them for ${LOCK_DAYS} days so a bad day cannot change the rules.</div><button class="btn sm" data-action="pt-lock">Lock for ${LOCK_DAYS} days</button></div>`;
+    const logAll = ui.rw.logAll, logs = live(data.pointsLog).sort((x, y) => y.at - x.at);
+    const weekChanges = logs.filter((l) => l.at > Date.now() - 7 * 86400000 && !/^Locked /.test(l.text)).length;
+    const logCard = `
+      <div class="card"><h2>Changes <small>${logs.length} total</small></h2>
+        ${weekChanges > 2 ? `<div class="pt-pending" style="margin:0 0 10px"><div class="note">${weekChanges} changes in the last 7 days. Try settling on numbers and let them run.</div></div>` : ''}
+        ${logs.length ? (logAll ? logs : logs.slice(0, 10)).map((l) => { const dt = new Date(l.at); return `<div class="pt-row"><span>${esc(l.text)}</span><span class="note" style="white-space:nowrap">${fmtShort(ymd(dt))}, ${dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span></div>`; }).join('')
+          : '<div class="note">Every change to your points or reward prices will be recorded here.</div>'}
+        ${logs.length > 10 ? `<div style="margin-top:8px"><button class="linkbtn" data-action="log-all">${logAll ? 'Show latest 10' : `Show all ${logs.length}`}</button></div>` : ''}
+      </div>`;
     const settings = `
       <div class="card"><h2>Points settings</h2>
-        <div class="field"><label>Count points from</label><input type="date" data-change="pt-start" value="${cfg.startDate}"></div>
-        <div class="field"><label class="chk"><input type="checkbox" data-change="pt-pen" ${cfg.penalties ? 'checked' : ''}> Deduct points for missed goals and blocks</label></div>
-        <div class="pt-grid">${PT_LABELS.map(([k, l]) => `<label class="pt-set"><span>${l}</span><input type="number" min="0" step="1" data-change="pt-val" data-key="${k}" value="${v[k]}"></label>`).join('')}</div>
-        <div class="row" style="margin-top:12px"><button class="btn" data-action="pt-reset">Reset to defaults</button></div>
+        ${lockBox}
+        <div class="field"><label>Count points from</label><input type="date" data-change="pt-start" value="${cfg.startDate}" ${dis}></div>
+        <div class="field"><label class="chk"><input type="checkbox" data-change="pt-pen" ${cfg.penalties ? 'checked' : ''} ${dis}> Deduct points for missed goals and blocks</label></div>
+        <div class="pt-grid">${PT_LABELS.map(([k, l]) => `<label class="pt-set"><span>${l}</span><input type="number" min="0" step="1" data-change="pt-val" data-key="${k}" value="${v[k]}" ${dis}></label>`).join('')}</div>
+        <div class="row" style="margin-top:12px"><button class="btn" data-action="pt-reset" ${dis}>Reset to defaults</button></div>
         <p class="note" style="margin-top:12px">Changing a value recalculates your whole history. Rest days (including ones you buy), skipped blocks, sleep and untracked gaps never cost points, and your score never goes below zero.</p>
       </div>`;
 
@@ -2351,7 +2388,7 @@
         ${header}
         <div class="grid">
           <div class="stack">${shop}${history}</div>
-          <div class="stack">${todayCard}${chart}${days}${settings}</div>
+          <div class="stack">${todayCard}${chart}${days}${settings}${logCard}</div>
         </div>
       </div>`;
   }
@@ -2540,9 +2577,10 @@
     // --- rewards
     'rw-add': () => rewardModal(null),
     'rw-edit': (el) => { const r = live(data.rewards).find((x) => x.id === el.dataset.id); if (r) rewardModal(r); },
-    'rw-del': (el) => { const r = live(data.rewards).find((x) => x.id === el.dataset.id); if (r) softDelete(r, `Deleted reward "${r.name}"`); },
+    'rw-del': (el) => { const r = live(data.rewards).find((x) => x.id === el.dataset.id); if (r) { ptLog(`Deleted reward "${r.name}"`); softDelete(r, `Deleted reward "${r.name}"`); } },
     'rw-suggest': () => {
       SUGGESTED_REWARDS.forEach(([name, cost, limit, needsGoal, special]) => data.rewards.push(touch({ id: uid(), name, cost, limit, needsGoal, rise: 0, ...(special ? { special } : {}) })));
+      ptLog(`Added ${SUGGESTED_REWARDS.length} suggested rewards`);
       persist(true); render(); toast('Rewards added. Edit the costs to suit you');
     },
     'rw-redeem': (el) => {
@@ -2554,9 +2592,19 @@
       toast(r.special === 'rest' ? `Rest day unlocked for ${st.price} points. Today is protected` : `Redeemed "${r.name}" for ${st.price} points`, () => { rec.deleted = true; touch(rec); persist(true); render(); });
     },
     'rd-undo': (el) => { const x = live(data.redemptions).find((r) => r.id === el.dataset.id); if (x) softDelete(x, `Returned ${x.cost} points for "${x.name}"`); },
+    'pt-lock': () => {
+      if (ptLocked()) return;
+      if (!confirm(`Lock all point values, prices and reward rules for ${LOCK_DAYS} days?\n\nYou will not be able to unlock early.`)) return;
+      data.pointsCfg.lockUntil = Date.now() + LOCK_DAYS * 86400000; touch(data.pointsCfg);
+      ptLog(`Locked points and prices for ${LOCK_DAYS} days`);
+      persist(true); render(); toast(`Locked until ${lockWhen()}`);
+    },
+    'log-all': () => { ui.rw.logAll = !ui.rw.logAll; render(); },
     'pt-open': (el) => { ui.rw.open[el.dataset.date] = !ui.rw.open[el.dataset.date]; render(); },
     'pt-reset': () => {
+      if (ptLocked()) { toast(lockMsg()); return; }
       if (!confirm('Reset all point values to the defaults?')) return;
+      ptLog('All point values reset to defaults');
       data.pointsCfg.v = {}; touch(data.pointsCfg); persist(true); render(); toast('Point values reset');
     },
     // --- subjects
@@ -2634,18 +2682,6 @@
       offerBlockMatch(rec);
       ui.date = rec.date; persist(true); render();
       toast(`Added ${short(r.seconds)} of ${topic}`, () => { rec.deleted = true; touch(rec); persist(true); render(); });
-    },
-    'rest-toggle': (el) => {
-      const d = el.dataset.date, on = !isRest(d);
-      if (boughtRest(d)) { toast('This rest day was bought with points. Undo it in Rewards to remove it'); return; }
-      if (on) {
-        const wk = weekStart(d), lim = data.settings.restPerWeek ?? 1;
-        let used = 0;
-        for (let i = 0; i < 7; i++) { const x = addDays(wk, i); if (x !== d && isRest(x)) used++; }
-        if (used >= lim && !confirm(`You have already taken ${used} rest ${used === 1 ? 'day' : 'days'} this week (limit ${lim}). Mark this one too?`)) return;
-      }
-      data.rest[d] = { on, updatedAt: Date.now() }; persist(true); render();
-      toast(on ? 'Rest day set. Your streak is safe' : 'Rest day removed');
     },
     'ci-set': (el) => {
       const d = ui.date, k = el.dataset.k, v = +el.dataset.v, ci = Object.assign({}, data.checkins[d]);
@@ -2748,10 +2784,26 @@
       if (hit) { ui.form.priority = hit.priority; render(); }
     },
     'gap-cap': (el) => { data.settings.gapCapMin = Math.min(720, Math.max(10, parseInt(el.value, 10) || 120)); touch(data.settings); persist(true); render(); toast('Updated'); },
-    'rest-limit': (el) => { data.settings.restPerWeek = Math.min(7, Math.max(0, parseInt(el.value, 10) || 0)); touch(data.settings); persist(true); toast('Updated'); },
-    'pt-val': (el) => { const k = el.dataset.key; if (!(k in PT_DEFAULTS)) return; data.pointsCfg.v[k] = Math.max(0, parseFloat(el.value) || 0); touch(data.pointsCfg); persist(true); render(); },
-    'pt-pen': (el) => { data.pointsCfg.penalties = !!el.checked; touch(data.pointsCfg); persist(true); render(); },
-    'pt-start': (el) => { if (el.value) { data.pointsCfg.startDate = el.value; touch(data.pointsCfg); persist(true); render(); } },
+
+    'pt-val': (el) => {
+      const k = el.dataset.key; if (!(k in PT_DEFAULTS)) return;
+      if (ptLocked()) { toast(lockMsg()); render(); return; }
+      const old = ptv()[k], nv = Math.max(0, parseFloat(el.value) || 0);
+      if (nv === old) { render(); return; }
+      data.pointsCfg.v[k] = nv; touch(data.pointsCfg);
+      ptLog(`${(PT_LABELS.find((x) => x[0] === k) || [k, k])[1]}: ${old} → ${nv}`);
+      persist(true); render();
+    },
+    'pt-pen': (el) => {
+      if (ptLocked()) { toast(lockMsg()); render(); return; }
+      data.pointsCfg.penalties = !!el.checked; touch(data.pointsCfg);
+      ptLog(`Penalties for missed goals and blocks: ${el.checked ? 'on' : 'off'}`);
+      persist(true); render();
+    },
+    'pt-start': (el) => {
+      if (ptLocked()) { toast(lockMsg()); render(); return; }
+      if (el.value && el.value !== data.pointsCfg.startDate) { ptLog(`Count points from: ${data.pointsCfg.startDate} → ${el.value}`); data.pointsCfg.startDate = el.value; touch(data.pointsCfg); persist(true); render(); }
+    },
     'topic-subject': (el) => { const t = data.topics.find((x) => x.id === el.dataset.id); if (t) { if (el.value) t.subjectId = el.value; else delete t.subjectId; touch(t); persist(true); render(); } },
     'imp-done': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.done = !!el.checked; touch(it); persist(true); render(); } },
     'ask-focus': (el) => { data.settings.askFocus = !!el.checked; touch(data.settings); persist(true); },
