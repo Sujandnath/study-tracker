@@ -125,7 +125,7 @@
       categories: BUILTIN_CATS.map((b) => ({ ...b, updatedAt: 0 })),
       plans: {},
       templates: [],
-      settings: { dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, updatedAt: t },
+      settings: { dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, updatedAt: t },
       timer: null,
       timerUpdatedAt: 0
     };
@@ -154,7 +154,7 @@
     d.important.title = d.important.title || 'Main topics';
     d.important.titleAt = d.important.titleAt || 0;
     if (!Array.isArray(d.important.items)) d.important.items = [];
-    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, updatedAt: 0 }, d.settings || {});
+    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, updatedAt: 0 }, d.settings || {});
     if (!d.timer) d.timer = null;
     return d;
   }
@@ -383,7 +383,7 @@
       id: uid(), topic, type: spec.type, priority: spec.priority,
       mode: spec.mode, targetSec: spec.mode === 'countdown' ? Math.round(spec.minutes * 60) : 0,
       accumulatedMs: 0, startedAt: Date.now(), startWall: Date.now(), comment: '', alerted: false,
-      blockId: spec.blockId || null, planDate: spec.planDate || null
+      blockId: spec.blockId || null, planDate: spec.planDate || null, planSec: spec.mode === 'stopwatch' ? Math.round(spec.planSec || 0) : 0
     };
     data.timerUpdatedAt = Date.now();
     persist(true);
@@ -403,6 +403,15 @@
   function stopTimer(save) {
     const t = data.timer; if (!t) return;
     const secs = Math.round(elapsedMs(t) / 1000);
+    let ask = null;
+    if (save && t.blockId && secs >= 60) { // stopped early on a timetable block: was the topic finished?
+      const pl = resolvePlan(t.planDate), bb = pl.blocks.find((x) => x.id === t.blockId);
+      if (bb && kindOf(bb.type) === 'study' && !pl.skipped.includes(bb.id) && !(pl.completed || []).includes(bb.id)) {
+        const prior = live(data.sessions).filter((x) => x.planDate === t.planDate && x.blockId === t.blockId).reduce((n, x) => n + x.seconds, 0);
+        const total = prior + secs, dur = blockDur(bb) * 60, floor = ptv().earlyFloor / 100;
+        if (total < dur * 0.9 && total >= dur * floor) ask = { date: t.planDate, b: bb, total, dur };
+      }
+    }
     data.timer = null; data.timerUpdatedAt = Date.now();
     if (save && secs >= 1) {
       const name = t.topic || defaultLabel(t.type);
@@ -416,7 +425,8 @@
       ensureTopic(t.topic, t.type, t.priority);
       ui.date = sessionDate(t.type, t.startWall, secs);
       toast(`Saved ${short(secs)} of ${name}`);
-      if (secs >= 60 && isWork({ type: t.type }) && data.settings.askFocus !== false) setTimeout(() => focusPrompt(sid), 0);
+      const after = () => { if (secs >= 60 && isWork({ type: t.type }) && data.settings.askFocus !== false) setTimeout(() => focusPrompt(sid), 0); };
+      if (ask) setTimeout(() => completePrompt(ask.date, ask.b, ask.total, ask.dur, after), 0); else after();
     } else if (save) {
       toast('Too short to save (under 1 second)');
     }
@@ -472,12 +482,13 @@
     const el = elapsedMs(t) / 1000;
     const shown = t.mode === 'countdown' ? Math.max(0, t.targetSec - el) : el;
     const over = t.mode === 'countdown' && el >= t.targetSec;
+    const pOver = t.mode === 'stopwatch' && t.planSec > 0 && el >= t.planSec;
 
-    if (over && !t.alerted && t.startedAt) {
+    if ((over || pOver) && !t.alerted && t.startedAt) {
       t.alerted = true; persist(true);
-      if (data.settings.sound !== false) ting();
+      if (data.settings.sound !== false && (over || data.settings.blockTing !== false)) ting();
       const label = t.topic || defaultLabel(t.type);
-      toast(`Time is up: ${label}`);
+      toast(over ? `Time is up: ${label}` : `Planned time reached: ${label}. Carry on or stop when you are done`);
       try { if ('Notification' in window) { Notification.requestPermission().then((p) => { if (p === 'granted') new Notification('Time is up', { body: label }); }); } } catch { /* ignore */ }
       render();
       return;
@@ -492,9 +503,9 @@
       clock.textContent = hms(over ? el - t.targetSec : shown);
       clock.classList.toggle('over', over);
       const rem = $('#remain');
-      if (rem) rem.textContent = t.mode === 'countdown' ? (over ? 'Target reached – overtime' : `of ${short(t.targetSec)} target`) : 'Stopwatch';
+      if (rem) rem.textContent = t.mode === 'countdown' ? (over ? 'Target reached – overtime' : `of ${short(t.targetSec)} target`) : t.planSec > 0 ? (pOver ? `Stopwatch · ${short(Math.round(el - t.planSec))} past the plan` : `Stopwatch · of ${short(t.planSec)} planned`) : 'Stopwatch';
       const bar = $('#tbar');
-      if (bar) bar.style.width = (t.mode === 'countdown' ? Math.min(100, el / t.targetSec * 100) : 0) + '%';
+      if (bar) bar.style.width = (t.mode === 'countdown' ? Math.min(100, el / t.targetSec * 100) : t.planSec > 0 ? Math.min(100, el / t.planSec * 100) : 0) + '%';
     }
     document.title = `${hms(shown)} · ${t.topic || defaultLabel(t.type)}`;
   }
@@ -1540,6 +1551,9 @@
             <div class="field"><label class="chk"><input type="checkbox" data-change="ask-focus" ${data.settings.askFocus !== false ? 'checked' : ''}> Ask for a focus rating when I stop a timer</label></div>
             <div class="field"><label class="chk"><input type="checkbox" data-change="sound" ${data.settings.sound !== false ? 'checked' : ''}> Play a soft bell when a countdown ends</label>
               <div><button class="btn sm" data-action="sound-test">Play sound</button></div></div>
+            <div class="field"><label>Start timetable blocks as</label>
+              <select data-change="block-mode"><option value="stopwatch" ${data.settings.blockMode !== 'countdown' ? 'selected' : ''}>Stopwatch (counts up, never stops on its own)</option><option value="countdown" ${data.settings.blockMode === 'countdown' ? 'selected' : ''}>Countdown to the block's end</option></select></div>
+            <div class="field"><label class="chk"><input type="checkbox" data-change="block-ting" ${data.settings.blockTing !== false ? 'checked' : ''}> Soft bell when a stopwatch block reaches its planned time</label></div>
             <div class="row">
               <button class="btn" data-action="export">Export backup</button>
               <button class="btn" data-action="import">Import &amp; merge</button>
@@ -1620,27 +1634,27 @@
   const ownPlan = (date) => { const p = data.plans[date]; return p && !p.deleted ? p : null; };
   function resolvePlan(date) {
     const own = ownPlan(date);
-    if (own) return { blocks: own.blocks || [], skipped: own.skipped || [], own: true, from: date };
+    if (own) return { blocks: own.blocks || [], skipped: own.skipped || [], completed: own.completed || [], own: true, from: date };
     let best = null;
     for (const k of Object.keys(data.plans)) {
       const p = data.plans[k];
       if (!p || p.deleted || k >= date) continue;
       if (!best || k > best) best = k;
     }
-    if (best) return { blocks: data.plans[best].blocks || [], skipped: [], own: false, from: best };
-    return { blocks: [], skipped: [], own: false, from: null };
+    if (best) return { blocks: data.plans[best].blocks || [], skipped: [], completed: [], own: false, from: best };
+    return { blocks: [], skipped: [], completed: [], own: false, from: null };
   }
   // Apply a change to a day's plan. Scope 'onward' (default): following days
   // keep repeating this plan. Scope 'day': tomorrow is pinned to the old plan.
   function savePlan(date, mutate) {
     const cur = resolvePlan(date);
-    const next = { blocks: clone(cur.blocks), skipped: [...cur.skipped] };
+    const next = { blocks: clone(cur.blocks), skipped: [...cur.skipped], completed: [...(cur.completed || [])] };
     mutate(next);
     if (ui.tt.scope === 'day') {
       const nd = addDays(date, 1);
       if (!ownPlan(nd)) data.plans[nd] = { blocks: clone(cur.blocks), skipped: [], updatedAt: Date.now() };
     }
-    data.plans[date] = { blocks: next.blocks, skipped: next.skipped.filter((id) => next.blocks.some((b) => b.id === id)), updatedAt: Date.now(), createdAt: (ownPlan(date) || {}).createdAt || Date.now() };
+    data.plans[date] = { blocks: next.blocks, skipped: next.skipped.filter((id) => next.blocks.some((b) => b.id === id)), completed: next.completed.filter((id) => next.blocks.some((b) => b.id === id)), updatedAt: Date.now(), createdAt: (ownPlan(date) || {}).createdAt || Date.now() };
     persist(true); render();
   }
 
@@ -1655,6 +1669,7 @@
     if (plan.skipped.includes(b.id)) return { key: 'skipped', label: 'Skipped', act };
     if (data.timer && data.timer.blockId === b.id && data.timer.planDate === date) return { key: 'now', label: 'In progress', act };
     if (act >= dur * 0.9) return { key: 'done', label: 'Done', act };
+    if ((plan.completed || []).includes(b.id) && act > 0) return { key: 'done', label: 'Done early', act, early: true };
     if (act > 0) return { key: 'partial', label: 'Partial', act };
     if (now > endMs) return { key: 'missed', label: 'Missed', act };
     if (now >= startMs) return { key: 'now', label: 'Now', act };
@@ -1721,6 +1736,8 @@
           </div>
           <div class="bact">
             ${canStart ? `<button class="btn sm primary" data-action="tt-start" data-date="${date}" data-id="${b.id}">${st.act && st.key !== 'done' ? 'Resume' : 'Start'}</button>` : ''}
+            ${canStart && st.key !== 'done' ? `<button class="btn sm" data-action="tt-start-alt" data-mode="${data.settings.blockMode === 'countdown' ? 'stopwatch' : 'countdown'}" data-date="${date}" data-id="${b.id}" title="Start this block the other way, just this once">${data.settings.blockMode === 'countdown' ? 'Stopwatch' : 'Countdown'}</button>` : ''}
+            ${st.early ? `<button class="btn sm" data-action="tt-reopen" data-date="${date}" data-id="${b.id}">Reopen</button>` : ''}
             <button class="btn sm" data-action="tt-edit" data-id="${b.id}">Edit</button>
             <button class="btn sm" data-action="tt-skip" data-id="${b.id}">${st.key === 'skipped' ? 'Unskip' : 'Skip'}</button>
           </div>
@@ -1978,11 +1995,27 @@
     updateEnd();
   }
 
-  function startFromBlock(date, id) {
+  function markBlockDone(date, id, on) {
+    const cur = resolvePlan(date), own = ownPlan(date);
+    const rec = { blocks: clone(cur.blocks), skipped: [...cur.skipped], completed: [...(cur.completed || [])], updatedAt: Date.now() };
+    if (own && own.createdAt) rec.createdAt = own.createdAt;
+    rec.completed = on ? [...new Set([...rec.completed, id])] : rec.completed.filter((x) => x !== id);
+    data.plans[date] = rec; persist(true); render();
+  }
+  function completePrompt(date, b, total, dur, after) {
+    choiceModal('Is this topic complete?', `
+      <p style="line-height:1.55;margin-bottom:6px"><b>${esc(b.topic || defaultLabel(b.type))}</b></p>
+      <p class="note" style="margin-bottom:16px">You studied ${short(total)} of the ${short(dur)} you planned. If the topic is finished, the block counts as done.</p>`, [
+      { label: 'Not yet', fn: after },
+      { label: 'Yes, complete', cls: 'primary', fn: () => { markBlockDone(date, b.id, true); toast('Block marked done', () => markBlockDone(date, b.id, false)); after(); } }
+    ]);
+  }
+  function startFromBlock(date, id, forceMode) {
     const b = resolvePlan(date).blocks.find((x) => x.id === id); if (!b) return;
     const rem = blockDur(b) * 60 - blockActual(date, id);
     const minutes = rem <= 0 ? blockDur(b) : Math.max(1, Math.ceil(rem / 60));
-    requestStart({ type: b.type, topic: b.topic, priority: b.priority, mode: 'countdown', minutes, blockId: b.id, planDate: date });
+    const mode = forceMode || (data.settings.blockMode === 'countdown' ? 'countdown' : 'stopwatch');
+    requestStart({ type: b.type, topic: b.topic, priority: b.priority, mode, minutes, planSec: mode === 'stopwatch' && rem > 0 ? rem : 0, blockId: b.id, planDate: date });
   }
 
   // "Now / Up next" card on the Today page
@@ -2017,7 +2050,7 @@
         if (kindOf(b.type) !== 'study' || plan.skipped.includes(b.id)) return;
         if (blockTimes(d, b).endMs > now) return;
         const dur = blockDur(b) * 60, act = blockActual(d, b.id);
-        planned += dur; n++; done += Math.min(dur, act); if (act >= dur * 0.9) nDone++;
+        planned += dur; n++; done += Math.min(dur, act); if (act >= dur * 0.9 || (act > 0 && (plan.completed || []).includes(b.id))) nDone++;
       });
     }
     const pct = planned ? Math.round(done / planned * 100) : null;
@@ -2094,9 +2127,9 @@
   //  timetable, check-ins, journal, sleep). Only rewards, redeemed items and
   //  the point settings are stored.
   // =====================================================================
-  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, blockH: 30, blockM: 20, blockL: 10, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30 };
+  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30 };
   const PT_LABELS = [
-    ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
+    ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
     ['blockH', 'Study block done: high'], ['blockM', 'Study block done: medium'], ['blockL', 'Study block done: low'],
     ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
@@ -2171,7 +2204,7 @@
         const dur = blockDur(b) * 60;
         let act = actual[d + '|' + b.id] || 0;
         if (isToday && tm && tm.blockId === b.id && tm.planDate === d) act += tmElapsed;
-        if (dur > 0 && act >= dur * 0.9) { if (b.priority === 'high') doneH++; else if (b.priority === 'low') doneL++; else doneM++; }
+        if (dur > 0 && (act >= dur * 0.9 || (act > 0 && (plan.completed || []).includes(b.id)))) { if (b.priority === 'high') doneH++; else if (b.priority === 'low') doneL++; else doneM++; }
         else if (act === 0 && blockTimes(d, b).endMs < now) missed++;
       });
       const nd = doneH + doneM + doneL;
@@ -2588,9 +2621,11 @@
       toast(bad.length ? `Added ${out.length}. Could not read: ${bad[0]}` : `Added ${out.length} ${out.length === 1 ? 'block' : 'blocks'}`);
     },
     'tt-start': (el) => startFromBlock(el.dataset.date, el.dataset.id),
+    'tt-start-alt': (el) => startFromBlock(el.dataset.date, el.dataset.id, el.dataset.mode),
+    'tt-reopen': (el) => { markBlockDone(el.dataset.date, el.dataset.id, false); toast('Block reopened'); },
     'tt-skip': (el) => {
       const date = ttDate(), cur = resolvePlan(date), id = el.dataset.id;
-      const rec = { blocks: clone(cur.blocks), skipped: [...cur.skipped], updatedAt: Date.now() };
+      const rec = { blocks: clone(cur.blocks), skipped: [...cur.skipped], completed: [...(cur.completed || [])], updatedAt: Date.now() };
       if ((ownPlan(date) || {}).createdAt) rec.createdAt = ownPlan(date).createdAt;
       rec.skipped = rec.skipped.includes(id) ? rec.skipped.filter((x) => x !== id) : [...rec.skipped, id];
       data.plans[date] = rec; persist(true); render();
@@ -2904,6 +2939,8 @@
     },
     'topic-subject': (el) => { const t = data.topics.find((x) => x.id === el.dataset.id); if (t) { if (el.value) t.subjectId = el.value; else delete t.subjectId; touch(t); persist(true); render(); } },
     'imp-done': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.done = !!el.checked; touch(it); persist(true); render(); } },
+    'block-mode': (el) => { data.settings.blockMode = el.value === 'countdown' ? 'countdown' : 'stopwatch'; touch(data.settings); persist(true); toast('Updated'); },
+    'block-ting': (el) => { data.settings.blockTing = !!el.checked; touch(data.settings); persist(true); },
     'ask-focus': (el) => { data.settings.askFocus = !!el.checked; touch(data.settings); persist(true); },
     sound: (el) => { data.settings.sound = !!el.checked; touch(data.settings); persist(true); if (el.checked) ting(); },
     'tt-date': (el) => { if (el.value) { ui.tt.date = el.value; render(); } },
