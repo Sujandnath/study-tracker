@@ -110,6 +110,8 @@
       redemptions: [],
       pointsCfg: { updatedAt: 0, startDate: todayStr(), penalties: true, v: {}, lockUntil: 0 },
       pointsLog: [],
+      loans: [],
+      repayments: [],
       presets: [
         { id: 'preset-pomodoro-25', name: 'Pomodoro 25', topic: '', type: 'study', priority: 'medium', minutes: 25, updatedAt: t },
         { id: 'preset-deep-focus-50', name: 'Deep focus 50', topic: '', type: 'study', priority: 'high', minutes: 50, updatedAt: t },
@@ -133,7 +135,7 @@
     d = d && typeof d === 'object' ? d : base;
     d.version = 1;
     d.deviceId = d.deviceId || base.deviceId;
-    for (const k of ['topics', 'subjects', 'rewards', 'redemptions', 'pointsLog', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
+    for (const k of ['topics', 'subjects', 'rewards', 'redemptions', 'pointsLog', 'loans', 'repayments', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
     if (!d.plans || typeof d.plans !== 'object' || Array.isArray(d.plans)) d.plans = {};
     if (!Array.isArray(d.categories)) d.categories = [];
     BUILTIN_CATS.forEach((b) => { if (!d.categories.some((x) => x.id === b.id)) d.categories.push({ ...b, updatedAt: 0 }); });
@@ -147,6 +149,8 @@
     if (!d.pointsCfg.v || typeof d.pointsCfg.v !== 'object') d.pointsCfg.v = {};
     d.pointsCfg.updatedAt = d.pointsCfg.updatedAt || 0;
     d.pointsCfg.lockUntil = d.pointsCfg.lockUntil || 0;
+    d.pointsCfg.planBy = d.pointsCfg.planBy || '08:00';
+    if (!Array.isArray(d.pointsCfg.autoLog)) d.pointsCfg.autoLog = [];
     d.important.title = d.important.title || 'Main topics';
     d.important.titleAt = d.important.titleAt || 0;
     if (!Array.isArray(d.important.items)) d.important.items = [];
@@ -171,6 +175,8 @@
     out.rewards = mergeById(out.rewards, inc.rewards);
     out.redemptions = mergeById(out.redemptions, inc.redemptions);
     out.pointsLog = mergeById(out.pointsLog, inc.pointsLog);
+    out.loans = mergeById(out.loans, inc.loans);
+    out.repayments = mergeById(out.repayments, inc.repayments);
     { const x = out.pointsCfg, y = inc.pointsCfg, lk = Math.max(x.lockUntil || 0, y.lockUntil || 0);
       if ((y.updatedAt || 0) > (x.updatedAt || 0)) out.pointsCfg = y;
       else if ((y.updatedAt || 0) === (x.updatedAt || 0) && y.startDate < x.startDate) x.startDate = y.startDate;
@@ -267,7 +273,7 @@
     const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
     try { return JSON.parse(text); } catch { return null; }
   }
-  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, rewards: d.rewards, redemptions: d.redemptions, pointsCfg: d.pointsCfg, pointsLog: d.pointsLog, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
+  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, rewards: d.rewards, redemptions: d.redemptions, pointsCfg: d.pointsCfg, pointsLog: d.pointsLog, loans: d.loans, repayments: d.repayments, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
 
   async function runSync() {
     if (!sync.token) return;
@@ -649,6 +655,8 @@
   // =====================================================================
   const boughtRest = (d) => ((data && data.redemptions) || []).some((r) => !r.deleted && r.special === 'rest' && r.date === d);
   const isRest = (d) => !!(data.rest && data.rest[d] && data.rest[d].on) || boughtRest(d);
+  const boughtPass = (d) => ((data && data.redemptions) || []).some((r) => !r.deleted && r.special === 'pass' && r.date === d);
+  const goalWaived = (d) => isRest(d) || boughtPass(d);
   const weekStart = (d) => addDays(d, -((parseYmd(d).getDay() + 6) % 7));
   const MOODS = [['😞', 'Rough'], ['🙁', 'Low'], ['😐', 'Okay'], ['🙂', 'Good'], ['😄', 'Great']];
   const FOCUS_WORDS = ['Scattered', 'Distracted', 'Okay', 'Focused', 'Deep focus'];
@@ -1632,7 +1640,7 @@
       const nd = addDays(date, 1);
       if (!ownPlan(nd)) data.plans[nd] = { blocks: clone(cur.blocks), skipped: [], updatedAt: Date.now() };
     }
-    data.plans[date] = { blocks: next.blocks, skipped: next.skipped.filter((id) => next.blocks.some((b) => b.id === id)), updatedAt: Date.now() };
+    data.plans[date] = { blocks: next.blocks, skipped: next.skipped.filter((id) => next.blocks.some((b) => b.id === id)), updatedAt: Date.now(), createdAt: (ownPlan(date) || {}).createdAt || Date.now() };
     persist(true); render();
   }
 
@@ -2086,9 +2094,9 @@
   //  timetable, check-ins, journal, sleep). Only rewards, redeemed items and
   //  the point settings are stored.
   // =====================================================================
-  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, blockH: 30, blockM: 20, blockL: 10, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30 };
+  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, blockH: 30, blockM: 20, blockL: 10, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30 };
   const PT_LABELS = [
-    ['study30', 'Study, per 30 minutes'], ['workout30', 'Workout, per 30 minutes'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'],
+    ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
     ['blockH', 'Study block done: high'], ['blockM', 'Study block done: medium'], ['blockL', 'Study block done: low'],
     ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
@@ -2117,11 +2125,16 @@
     const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t]));
     const subs = live(data.subjects).filter((s) => live(data.topics).some((t) => t.subjectId === s.id));
     const reds = live(data.redemptions);
+    const loanBy = {}; live(data.loans).forEach((l) => { (loanBy[l.date] = loanBy[l.date] || []).push(l); });
+    const repBy = {}; live(data.repayments).forEach((r) => { (repBy[r.date] = repBy[r.date] || []).push(r); });
+    const autoLog = [...(cfg.autoLog || [])].sort((x, y) => (x.d < y.d ? -1 : 1));
+    const autoOn = (d) => { let on = true; autoLog.forEach((e) => { if (e.d <= d) on = e.on; }); return on; };
+    const share = Math.min(100, Math.max(0, v.loanShare)) / 100;
     const redBy = {}; reds.forEach((r) => { (redBy[r.date] = redBy[r.date] || []).push(r); });
     let first = start;
     studyDays.forEach((d) => { if (d < first) first = d; });
     const days = {};
-    let L = 0, A = 0, streakLen = 0, spent = 0, pending = 0;
+    let L = 0, A = 0, streakLen = 0, spent = 0, pending = 0, debt = 0, borrowed = 0, repaidAll = 0;
     for (let d = first, guard = 0; d <= today && guard < 4000; d = addDays(d, 1), guard++) {
       const isToday = d === today, finished = !isToday;
       const list = by[d] || [];
@@ -2131,14 +2144,18 @@
       streakLen = studied ? streakLen + 1 : (isRest(d) || isToday) ? streakLen : 0;
       (redBy[d] || []).forEach((r) => { spent += r.cost; });
       if (d < start) { continue; }
+      (loanBy[d] || []).forEach((l) => { A += l.principal; debt += l.principal + l.fee; borrowed += l.principal + l.fee; }); // a loan adds spendable points only, never score
       const items = [];
       const add = (label, pts, kind) => { if (pts) items.push({ label, pts, kind }); };
-      add(`Study ${short(study)}`, Math.floor(study / 1800) * v.study30, 'earn');
+      add(`Study ${short(study)}`, Math.round(study / 60 * v.study30 / 30), 'earn'); // every minute counts
       if (goal > 0 && study >= goal) add('Daily goal reached', v.goal, 'earn');
+      if (goal > 0 && v.stretchMin * 60 > goal && study >= v.stretchMin * 60) add('Stretch goal reached', v.stretch, 'earn');
+      { const own = data.plans[d], by = String(cfg.planBy || '08:00').split(':'), cut = parseYmd(d); cut.setHours(+by[0] || 8, +by[1] || 0, 0, 0);
+        if (own && !own.deleted && own.createdAt && (own.blocks || []).length && own.createdAt <= cut.getTime()) add('Planned the day early', v.plan, 'earn'); }
       let wsec = list.filter((s) => kindOf(s.type) !== 'study' && kindOf(s.type) !== 'sleep' && isWorkout(s)).reduce((n, s) => n + s.seconds, 0);
       if (isToday && tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isWorkout(tm)) wsec += tmElapsed;
-      const wch = Math.min(v.workoutMax, Math.floor(wsec / 1800));
-      if (wch) add(`Workout ${short(wsec)}`, wch * v.workout30, 'earn');
+      const wmin = Math.min(wsec / 60, v.workoutMax * 30), wpts = Math.round(wmin * v.workout30 / 30);
+      if (wpts) add(`Workout ${short(wsec)}`, wpts, 'earn');
       // timetable blocks
       const plan = resolvePlan(d);
       let doneH = 0, doneM = 0, doneL = 0, missed = 0;
@@ -2171,7 +2188,7 @@
       // penalties (only for finished days; rest days are protected). Today shows what would apply if it ended now.
       const pens = [];
       if (cfg.penalties && !isRest(d)) {
-        if (goal > 0 && study < goal) { const p = Math.round(v.missGoal * (1 - study / goal)); if (p) pens.push({ label: 'Missed daily goal', pts: -p }); }
+        if (goal > 0 && study < goal && !boughtPass(d)) { const p = Math.round(v.missGoal * (1 - study / goal)); if (p) pens.push({ label: 'Missed daily goal', pts: -p }); }
         if (missed) pens.push({ label: `${missed} missed ${missed === 1 ? 'block' : 'blocks'}`, pts: -missed * v.missBlock });
       }
       const rawPen = pens.reduce((n, p) => n + p.pts, 0), pen = Math.max(rawPen, -v.cap);
@@ -2186,10 +2203,15 @@
         L = Math.max(0, L + earned); A = Math.max(0, A + earned);
         pending = pen;
       }
+      if (debt > 0 && autoOn(d)) {
+        const base = Math.max(0, finished ? days[d].total : days[d].earned), pay = Math.min(debt, A, Math.round(base * share));
+        if (pay > 0) { A -= pay; debt -= pay; repaidAll += pay; days[d].repaid = pay; }
+      }
       (redBy[d] || []).forEach((r) => { A = Math.max(0, A - r.cost); });
+      (repBy[d] || []).forEach((r) => { const pay = Math.min(r.amount, A, debt); if (pay > 0) { A -= pay; debt -= pay; repaidAll += pay; } });
     }
     // redemptions made before the start date still count as spent (rare)
-    return { days, L, A, spent, pending, start, today, studyToday: (() => { let s = (by[today] || []).filter((x) => kindOf(x.type) === 'study').reduce((n, x) => n + x.seconds, 0); if (tm && kindOf(tm.type) === 'study') s += tmElapsed; return s; })() };
+    return { days, L, A, debt, borrowed, repaidAll, spent, pending, start, today, studyToday: (() => { let s = (by[today] || []).filter((x) => kindOf(x.type) === 'study').reduce((n, x) => n + x.seconds, 0); if (tm && kindOf(tm.type) === 'study') s += tmElapsed; return s; })() };
   }
   function levelOf(L) {
     let i = 0;
@@ -2216,13 +2238,17 @@
     if (lim === 'day' && inDay >= 1) return { price, ok: false, why: 'Limit reached today (once a day)' };
     if (lim === 'week' && inWeek >= 1) return { price, ok: false, why: 'Limit reached this week (once a week)' };
     if (lim === 'month' && inMonth >= 1) return { price, ok: false, why: 'Limit reached this month (once a month)' };
-    if (r.needsGoal && goal > 0 && pts.studyToday < goal) return { price, ok: false, why: `Reach today's goal first (${short(Math.max(0, goal - pts.studyToday))} to go)` };
+    if (r.special === 'pass' && boughtPass(today)) return { price, ok: false, why: 'Goal pass already used today' };
+    if (r.special === 'pass' && isRest(today)) return { price, ok: false, why: 'Today is already a rest day' };
+    if (r.needsGoal && goal > 0 && pts.studyToday < goal && !goalWaived(today)) return { price, ok: false, why: `Reach today's goal first (${short(Math.max(0, goal - pts.studyToday))} to go)` };
+    if (pts.debt > 0 && !r.allowDebt && !r.special) return { price, ok: false, why: `Repay your loan first (you owe ${pts.debt}). Only small rewards are open while in debt` };
     if (pts.A < price) return { price, ok: false, why: `${price - pts.A} more points needed` };
     return { price, ok: true, why: '' };
   }
   const SUGGESTED_REWARDS = [
-    ['Rest day (streak safe, no penalties)', 400, 'week', false, 'rest'],
-    ['Chai or snack', 60, 'twice', false], ['Favourite song break', 60, 'twice', false], ['20 minutes of social media', 80, 'twice', true],
+    ['Rest day (streak safe, no penalties)', 1200, 'week', false, 'rest'],
+    ['Goal pass (skip today’s goal)', 300, 'week', false, 'pass'],
+    ['Chai or snack', 60, 'twice', false, '', true], ['Favourite song break', 60, 'twice', false, '', true], ['20 minutes of social media', 80, 'twice', true, '', true],
     ['30-minute sleep-in', 150, 'week', true], ['1 hour of gaming or a show', 200, 'day', true], ['Order a favourite meal', 250, 'week', true],
     ['New book or stationery', 600, 'month', false], ['Movie', 700, 'week', true], ['Dinner out', 900, 'week', true],
     ['Half-day off', 3000, 'month', false], ['Day trip (big goal)', 4000, 'month', false]
@@ -2236,19 +2262,20 @@
         <div class="field grow"><label>Limit</label><select id="rw-limit">${Object.entries(LIMITS).map(([k, l]) => `<option value="${k}" ${(r.limit || 'none') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       </div>
       <div class="row">
-        <div class="field grow"><label>Type</label><select id="rw-special"><option value="" ${!r.special ? 'selected' : ''}>Normal reward</option><option value="rest" ${r.special === 'rest' ? 'selected' : ''}>Rest day (protects today)</option></select></div>
+        <div class="field grow"><label>Type</label><select id="rw-special"><option value="" ${!r.special ? 'selected' : ''}>Normal reward</option><option value="rest" ${r.special === 'rest' ? 'selected' : ''}>Rest day (protects today)</option><option value="pass" ${r.special === 'pass' ? 'selected' : ''}>Goal pass (skips today’s goal)</option></select></div>
         <div class="field grow"><label>Unlock</label><select id="rw-goal"><option value="0" ${!r.needsGoal ? 'selected' : ''}>Any time</option><option value="1" ${r.needsGoal ? 'selected' : ''}>Only after today's goal</option></select></div>
         <div class="field grow"><label>Price rise per use (%)</label><input type="number" id="rw-rise" min="0" max="200" step="5" value="${r.rise || 0}"></div>
       </div>
+      <div class="field"><label>While you owe a loan</label><select id="rw-debt"><option value="0" ${!r.allowDebt ? 'selected' : ''}>Blocked until the loan is repaid</option><option value="1" ${r.allowDebt ? 'selected' : ''}>Still allowed (small rewards)</option></select></div>
       <p class="note">The price rise applies for each time you redeemed it in the last 7 days, so a snack cannot become an everyday habit.</p>`, () => {
       const name = $('#rw-name').value.trim(), cost = parseInt($('#rw-cost').value, 10);
       if (!name) { toast('Give the reward a name'); return false; }
       if (!(cost >= 1)) { toast('Enter a cost of at least 1 point'); return false; }
       const rec = existing || { id: uid() };
-      const nv = { name, cost, limit: $('#rw-limit').value, needsGoal: $('#rw-goal').value === '1', rise: Math.max(0, parseFloat($('#rw-rise').value) || 0), special: $('#rw-special').value };
-      const old = existing ? { cost: rec.cost, limit: rec.limit || 'none', needsGoal: !!rec.needsGoal, rise: rec.rise || 0, special: rec.special || '' } : null;
+      const nv = { name, cost, limit: $('#rw-limit').value, needsGoal: $('#rw-goal').value === '1', rise: Math.max(0, parseFloat($('#rw-rise').value) || 0), special: $('#rw-special').value, allowDebt: $('#rw-debt').value === '1' };
+      const old = existing ? { cost: rec.cost, limit: rec.limit || 'none', needsGoal: !!rec.needsGoal, rise: rec.rise || 0, special: rec.special || '', allowDebt: !!rec.allowDebt } : null;
       if (existing && ptLocked()) Object.assign(nv, old); // cost and rules stay as they were while locked
-      Object.assign(rec, { name: nv.name, cost: nv.cost, limit: nv.limit, needsGoal: nv.needsGoal, rise: nv.rise });
+      Object.assign(rec, { name: nv.name, cost: nv.cost, limit: nv.limit, needsGoal: nv.needsGoal, rise: nv.rise, allowDebt: nv.allowDebt });
       if (nv.special) rec.special = nv.special; else delete rec.special;
       if (!existing) ptLog(`Added reward "${nv.name}" (${nv.cost} points)`);
       else {
@@ -2256,8 +2283,9 @@
         if (old.cost !== nv.cost) ch.push(`cost ${old.cost} → ${nv.cost}`);
         if (old.limit !== nv.limit) ch.push(`limit ${LIMITS[old.limit]} → ${LIMITS[nv.limit]}`);
         if (old.needsGoal !== nv.needsGoal) ch.push(nv.needsGoal ? 'now needs the daily goal' : 'no longer needs the daily goal');
+        if (old.allowDebt !== nv.allowDebt) ch.push(nv.allowDebt ? 'now allowed while in debt' : 'now blocked while in debt');
         if (old.rise !== nv.rise) ch.push(`price rise ${old.rise}% → ${nv.rise}%`);
-        if (old.special !== nv.special) ch.push(nv.special ? 'set as a rest-day reward' : 'no longer a rest-day reward');
+        if (old.special !== nv.special) ch.push(nv.special ? `type set to ${nv.special === 'rest' ? 'rest day' : 'goal pass'}` : 'now a normal reward');
         if (ch.length) ptLog(`Reward "${nv.name}": ${ch.join(', ')}`);
       }
       touch(rec);
@@ -2265,7 +2293,7 @@
       persist(true); render();
     });
     if (existing && ptLocked()) {
-      ['#rw-cost', '#rw-limit', '#rw-goal', '#rw-rise', '#rw-special'].forEach((s) => { const e = $(s); if (e) e.disabled = true; });
+      ['#rw-cost', '#rw-limit', '#rw-goal', '#rw-rise', '#rw-special', '#rw-debt'].forEach((s) => { const e = $(s); if (e) e.disabled = true; });
       $('#modal-body').insertAdjacentHTML('beforeend', `<p class="note">Cost and rules are locked until ${esc(lockWhen())}. You can still rename it.</p>`);
     }
   }
@@ -2300,7 +2328,8 @@
     const header = `
       <div class="card pt-hero">
         <div class="pt-big"><div class="lbl">Available points</div><div class="num">${pts.A.toLocaleString('en-IN')}</div>
-          <div class="note">Lifetime score ${pts.L.toLocaleString('en-IN')} · spent ${pts.spent.toLocaleString('en-IN')} on rewards</div></div>
+          <div class="note">Lifetime score ${pts.L.toLocaleString('en-IN')} · spent ${pts.spent.toLocaleString('en-IN')} on rewards</div>
+          ${pts.debt > 0 ? `<div class="pt-debt">You owe ${pts.debt.toLocaleString('en-IN')} points on a loan</div>` : ''}</div>
         <div class="pt-level">
           <div class="lvname"><span class="lbl">Level</span><b>${lv.name}</b></div>
           <div class="bar"><i style="width:${lv.pct}%"></i></div>
@@ -2311,8 +2340,9 @@
 
     const todayCard = `
       <div class="card"><h2>Today <small>${fmtShort(today)}</small></h2>
+        ${goalWaived(today) ? `<div class="pt-pending" style="margin:0 0 10px"><div class="note">${boughtPass(today) ? 'Goal pass active' : 'Rest day'}: today's goal is waived, so goal-gated rewards are unlocked.</div></div>` : ''}
         ${!td ? `<div class="note">Points start counting on <b>${fmtShort(pts.start)}</b>. You can change this in the settings below.</div>`
-          : `${td.items.length ? itemRows(td.items) : '<div class="note">Nothing earned yet. Start a timer to get going.</div>'}
+          : `${td.items.length ? itemRows(td.items) : '<div class="note">Nothing earned yet. Start a timer to get going.</div>'}${td.repaid ? `<div class="pt-row loan"><span>Auto-repaid to your loan</span><b>−${td.repaid}</b></div>` : ''}
              <div class="pt-row tot"><span>Earned today</span><b>${sgn(td.earned)}</b></div>
              ${td.pendingItems && td.pendingItems.length ? `<div class="pt-pending"><div class="lbl">If the day ended now</div>${itemRows(td.pendingItems)}<div class="note">Penalties are only applied when the day ends. Reach your goal and complete your blocks to avoid them.</div></div>` : ''}`}
       </div>`;
@@ -2328,7 +2358,7 @@
       const rise = r.rise && st.price !== r.cost ? ` <span class="note">(base ${r.cost})</span>` : '';
       return `<div class="rw-card ${st.ok ? 'ready' : ''}">
         <div class="rw-top"><b>${esc(r.name)}</b><span class="rw-cost">${st.price.toLocaleString('en-IN')} pts${rise}</span></div>
-        <div class="rw-meta">${LIMITS[r.limit || 'none']}${r.special === 'rest' ? ' · protects your streak, no penalties' : ''}${r.needsGoal ? ' · after today’s goal' : ''}${r.rise ? ` · +${r.rise}% per use` : ''}</div>
+        <div class="rw-meta">${LIMITS[r.limit || 'none']}${r.special === 'rest' ? ' · protects your streak, no penalties' : r.special === 'pass' ? ' · skips today’s goal and its penalty' : ''}${r.needsGoal ? ' · after today’s goal' : ''}${r.allowDebt ? ' · open while in debt' : ''}${r.rise ? ` · +${r.rise}% per use` : ''}</div>
         <div class="bar"><i style="width:${pct}%"></i></div>
         <div class="rw-act">
           <button class="btn sm primary" data-action="rw-redeem" data-id="${r.id}" ${st.ok ? '' : 'disabled'}>Redeem</button>
@@ -2345,6 +2375,20 @@
               <div style="margin-top:12px"><button class="btn sm" data-action="rw-suggest">Add suggested rewards</button></div></div>`}
       </div>`;
 
+    const autoNow = (() => { let on = true; (cfg.autoLog || []).slice().sort((x, y) => (x.d < y.d ? -1 : 1)).forEach((e) => { if (e.d <= today) on = e.on; }); return on; })();
+    const loanCard = `
+      <div class="card"><h2>Loan <small>for emergencies</small></h2>
+        ${pts.debt > 0 ? `
+          <div class="loan-owe"><div><div class="lbl">You owe</div><div class="num">${pts.debt.toLocaleString('en-IN')}</div></div>
+            <div class="note">Borrowed with fee ${pts.borrowed.toLocaleString('en-IN')} · repaid ${pts.repaidAll.toLocaleString('en-IN')}</div></div>
+          <div class="loan-act"><input type="number" id="loan-amt" min="1" max="${pts.debt}" placeholder="Amount" inputmode="numeric">
+            <button class="btn sm primary" data-action="loan-repay">Repay</button>
+            <button class="btn sm" data-action="loan-repay-all" ${pts.A > 0 ? '' : 'disabled'}>Repay all you can</button></div>
+          <div class="note">Only rewards marked "open while in debt", rest days and goal passes can be redeemed until this is cleared.</div>`
+        : `<div class="note">No loan. Borrow up to <b>${v.loanMax.toLocaleString('en-IN')}</b> points. A ${v.loanFee}% fee is added once, and the debt never grows after that.</div>
+           <div class="loan-act"><button class="btn sm primary" data-action="loan-take">Take a loan</button></div>`}
+        <div class="field" style="margin:12px 0 0"><label class="chk"><input type="checkbox" data-change="loan-auto" ${autoNow ? 'checked' : ''}> Auto-repay ${v.loanShare}% of each day's earnings while I owe</label></div>
+      </div>`;
     const history = `
       <div class="card"><h2>Redeemed <small>latest 10</small></h2>
         ${hist.length ? hist.map((x) => `<div class="list-row"><div class="grow"><div class="nm">${esc(x.name)}</div><div class="meta">${fmtShort(x.date)}</div></div><b class="neg">−${x.cost}</b><button class="btn sm" data-action="rd-undo" data-id="${x.id}">Undo</button></div>`).join('')
@@ -2355,7 +2399,7 @@
       <div class="card"><h2>Recent days <small>tap a day for the breakdown</small></h2>
         ${recent.length ? recent.map((d) => { const x = pts.days[d], open = !!ui.rw.open[d]; return `
           <div class="pd ${open ? 'open' : ''}"><div class="pd-head" data-action="pt-open" data-date="${d}"><span class="caret">›</span><span class="grow">${fmtDow(d)}, ${fmtShort(d)}${isRest(d) ? ' <span class="pill rest">Rest</span>' : ''}</span><b class="${x.total < 0 ? 'neg' : 'pos'}">${sgn(x.total)}</b></div>
-          ${open ? `<div class="pd-body">${x.items.length ? itemRows(x.items) : '<div class="note">Nothing earned or lost.</div>'}</div>` : ''}</div>`; }).join('')
+          ${open ? `<div class="pd-body">${x.items.length ? itemRows(x.items) : '<div class="note">Nothing earned or lost.</div>'}${x.repaid ? `<div class="pt-row loan"><span>Auto-repaid to your loan</span><b>−${x.repaid}</b></div>` : ''}</div>` : ''}</div>`; }).join('')
           : '<div class="note">Finished days will appear here.</div>'}
       </div>`;
 
@@ -2376,6 +2420,7 @@
       <div class="card"><h2>Points settings</h2>
         ${lockBox}
         <div class="field"><label>Count points from</label><input type="date" data-change="pt-start" value="${cfg.startDate}" ${dis}></div>
+        <div class="field"><label>Plan the day in the timetable by (earns the planning bonus)</label><input type="time" data-change="pt-planby" value="${esc(cfg.planBy || '08:00')}" ${dis}></div>
         <div class="field"><label class="chk"><input type="checkbox" data-change="pt-pen" ${cfg.penalties ? 'checked' : ''} ${dis}> Deduct points for missed goals and blocks</label></div>
         <div class="pt-grid">${PT_LABELS.map(([k, l]) => `<label class="pt-set"><span>${l}</span><input type="number" min="0" step="1" data-change="pt-val" data-key="${k}" value="${v[k]}" ${dis}></label>`).join('')}</div>
         <div class="row" style="margin-top:12px"><button class="btn" data-action="pt-reset" ${dis}>Reset to defaults</button></div>
@@ -2387,7 +2432,7 @@
       <div class="stack">
         ${header}
         <div class="grid">
-          <div class="stack">${shop}${history}</div>
+          <div class="stack">${loanCard}${shop}${history}</div>
           <div class="stack">${todayCard}${chart}${days}${settings}${logCard}</div>
         </div>
       </div>`;
@@ -2537,6 +2582,7 @@
     'tt-skip': (el) => {
       const date = ttDate(), cur = resolvePlan(date), id = el.dataset.id;
       const rec = { blocks: clone(cur.blocks), skipped: [...cur.skipped], updatedAt: Date.now() };
+      if ((ownPlan(date) || {}).createdAt) rec.createdAt = ownPlan(date).createdAt;
       rec.skipped = rec.skipped.includes(id) ? rec.skipped.filter((x) => x !== id) : [...rec.skipped, id];
       data.plans[date] = rec; persist(true); render();
     },
@@ -2579,7 +2625,7 @@
     'rw-edit': (el) => { const r = live(data.rewards).find((x) => x.id === el.dataset.id); if (r) rewardModal(r); },
     'rw-del': (el) => { const r = live(data.rewards).find((x) => x.id === el.dataset.id); if (r) { ptLog(`Deleted reward "${r.name}"`); softDelete(r, `Deleted reward "${r.name}"`); } },
     'rw-suggest': () => {
-      SUGGESTED_REWARDS.forEach(([name, cost, limit, needsGoal, special]) => data.rewards.push(touch({ id: uid(), name, cost, limit, needsGoal, rise: 0, ...(special ? { special } : {}) })));
+      SUGGESTED_REWARDS.forEach(([name, cost, limit, needsGoal, special, allowDebt]) => data.rewards.push(touch({ id: uid(), name, cost, limit, needsGoal, rise: 0, ...(allowDebt ? { allowDebt: true } : {}), ...(special ? { special } : {}) })));
       ptLog(`Added ${SUGGESTED_REWARDS.length} suggested rewards`);
       persist(true); render(); toast('Rewards added. Edit the costs to suit you');
     },
@@ -2589,7 +2635,7 @@
       if (!st.ok) { toast(st.why); return; }
       const rec = touch({ id: uid(), rewardId: r.id, name: r.name, cost: st.price, date: todayStr(), ...(r.special ? { special: r.special } : {}) });
       data.redemptions.push(rec); persist(true); render();
-      toast(r.special === 'rest' ? `Rest day unlocked for ${st.price} points. Today is protected` : `Redeemed "${r.name}" for ${st.price} points`, () => { rec.deleted = true; touch(rec); persist(true); render(); });
+      toast(r.special === 'rest' ? `Rest day unlocked for ${st.price} points. Today is protected` : r.special === 'pass' ? `Goal pass bought for ${st.price} points. Today's goal is waived` : `Redeemed "${r.name}" for ${st.price} points`, () => { rec.deleted = true; touch(rec); persist(true); render(); });
     },
     'rd-undo': (el) => { const x = live(data.redemptions).find((r) => r.id === el.dataset.id); if (x) softDelete(x, `Returned ${x.cost} points for "${x.name}"`); },
     'pt-lock': () => {
@@ -2598,6 +2644,38 @@
       data.pointsCfg.lockUntil = Date.now() + LOCK_DAYS * 86400000; touch(data.pointsCfg);
       ptLog(`Locked points and prices for ${LOCK_DAYS} days`);
       persist(true); render(); toast(`Locked until ${lockWhen()}`);
+    },
+    'loan-take': () => {
+      const pts = computePoints(), v = ptv();
+      if (pts.debt > 0) { toast('Repay your current loan first'); return; }
+      const max = Math.max(1, v.loanMax);
+      openModal('Take a loan', `
+        <div class="field"><label>How many points? (up to ${max})</label><input type="number" id="loan-new" min="1" max="${max}" step="10" value="${Math.min(500, max)}"></div>
+        <p class="note">A ${v.loanFee}% fee is added once. For 500 points you would owe ${Math.round(500 * (1 + v.loanFee / 100))}. Your level and score do not change.</p>`, () => {
+        const amt = Math.round(parseFloat($('#loan-new').value));
+        if (!(amt >= 1) || amt > max) { toast(`Enter 1 to ${max}`); return false; }
+        const fee = Math.round(amt * v.loanFee / 100);
+        const rec = touch({ id: uid(), date: todayStr(), principal: amt, fee });
+        data.loans.push(rec); ptLog(`Took a loan of ${amt} (owe ${amt + fee})`);
+        persist(true); render();
+        toast(`Borrowed ${amt} points. You owe ${amt + fee}`, () => { rec.deleted = true; touch(rec); ptLog(`Cancelled the loan of ${amt}`); persist(true); render(); });
+      }, 'Borrow');
+    },
+    'loan-repay': () => {
+      const pts = computePoints(), el = $('#loan-amt'), amt = Math.round(parseFloat(el && el.value));
+      if (!(amt >= 1)) { toast('Enter an amount to repay'); return; }
+      if (amt > pts.A) { toast(`You only have ${pts.A} available points`); return; }
+      if (amt > pts.debt) { toast(`You only owe ${pts.debt}`); return; }
+      const rec = touch({ id: uid(), date: todayStr(), amount: amt });
+      data.repayments.push(rec); ptLog(`Repaid ${amt} of the loan`); persist(true); render();
+      toast(`Repaid ${amt} points`, () => { rec.deleted = true; touch(rec); persist(true); render(); });
+    },
+    'loan-repay-all': () => {
+      const pts = computePoints(), amt = Math.min(pts.A, pts.debt);
+      if (amt < 1) { toast('No available points to repay with'); return; }
+      const rec = touch({ id: uid(), date: todayStr(), amount: amt });
+      data.repayments.push(rec); ptLog(`Repaid ${amt} of the loan`); persist(true); render();
+      toast(amt >= pts.debt ? 'Loan cleared' : `Repaid ${amt} points`, () => { rec.deleted = true; touch(rec); persist(true); render(); });
     },
     'log-all': () => { ui.rw.logAll = !ui.rw.logAll; render(); },
     'pt-open': (el) => { ui.rw.open[el.dataset.date] = !ui.rw.open[el.dataset.date]; render(); },
@@ -2793,6 +2871,16 @@
       data.pointsCfg.v[k] = nv; touch(data.pointsCfg);
       ptLog(`${(PT_LABELS.find((x) => x[0] === k) || [k, k])[1]}: ${old} → ${nv}`);
       persist(true); render();
+    },
+    'loan-auto': (el) => {
+      const t = todayStr(), log = (data.pointsCfg.autoLog || []).filter((e) => e.d !== t);
+      log.push({ d: t, on: !!el.checked }); data.pointsCfg.autoLog = log; touch(data.pointsCfg);
+      ptLog(`Loan auto-repay turned ${el.checked ? 'on' : 'off'}`);
+      persist(true); render();
+    },
+    'pt-planby': (el) => {
+      if (ptLocked()) { toast(lockMsg()); render(); return; }
+      if (el.value && el.value !== data.pointsCfg.planBy) { ptLog(`Plan the day by: ${data.pointsCfg.planBy} → ${el.value}`); data.pointsCfg.planBy = el.value; touch(data.pointsCfg); persist(true); render(); }
     },
     'pt-pen': (el) => {
       if (ptLocked()) { toast(lockMsg()); render(); return; }
