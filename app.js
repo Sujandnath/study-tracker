@@ -222,7 +222,7 @@
     donut: { mode: 'type', sel: null },
     imp: { text: false },
     lib: { org: false, sel: [] },
-    rw: { open: {}, logAll: false, set: (() => { try { return localStorage.getItem('st-pt-set') === '1'; } catch (e) { return false; } })() },
+    rw: { open: {}, mode: 'day', date: null, month: null, from: null, to: null, logAll: false, set: (() => { try { return localStorage.getItem('st-pt-set') === '1'; } catch (e) { return false; } })() },
     form: { type: 'study', topic: '', priority: 'medium', mode: 'stopwatch', minutes: 25 },
     prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr(), incOther: false, open: {} }
   };
@@ -2264,6 +2264,7 @@
       }
       (redBy[d] || []).forEach((r) => { A = Math.max(0, A - r.cost); });
       (repBy[d] || []).forEach((r) => { const pay = Math.min(r.amount, A, debt); if (pay > 0) { A -= pay; debt -= pay; repaidAll += pay; } });
+      days[d].avail = A;
     }
     // redemptions made before the start date still count as spent (rare)
     return { days, L, A, debt, borrowed, repaidAll, spent, pending, start, today, studyToday: (() => { let s = (by[today] || []).filter((x) => kindOf(x.type) === 'study').reduce((n, x) => n + x.seconds, 0); if (tm && kindOf(tm.type) === 'study') s += tmElapsed; return s; })() };
@@ -2371,6 +2372,78 @@
   }
   const itemRows = (items) => items.map((i) => `<div class="pt-row ${i.kind}"><span>${esc(i.label)}</span><b>${sgn(i.pts)}</b></div>`).join('');
 
+  // ---- earnings & spending for a chosen period (Day / Week / Month / Custom)
+  const itemKey = (l) => /^Study \d|^Study$/.test(l) ? 'Study time' : /^Workout/.test(l) ? 'Workout' : /^Daily goal/.test(l) ? 'Daily goal' : /^Stretch/.test(l) ? 'Stretch goal'
+    : /study blocks? done/.test(l) ? 'Study blocks done' : /focused/.test(l) ? 'Focused sessions' : /^Evening check-in/.test(l) ? 'Evening check-in' : /^Journal/.test(l) ? 'Journal' : /^Sleep/.test(l) ? 'Sleep logged'
+    : /-day streak/.test(l) ? 'Streak bonuses' : /^Every subject/.test(l) ? 'All subjects studied' : /^Planned the day/.test(l) ? 'Planned early' : /^Missed daily goal/.test(l) ? 'Missed daily goal'
+    : /missed blocks?/.test(l) ? 'Missed study blocks' : /penalty cap/.test(l) ? 'Daily penalty cap' : l;
+  function rwRange(today) {
+    const r = ui.rw, m = r.mode, anchor = r.date && r.date <= today ? r.date : today;
+    if (m === 'week') { const s = weekStart(anchor); return { from: s, to: addDays(s, 6) < today ? addDays(s, 6) : today }; }
+    if (m === 'month') {
+      const ym = r.month || today.slice(0, 7), first = ym + '-01', nxt = parseYmd(first); nxt.setMonth(nxt.getMonth() + 1);
+      const last = addDays(ymd(nxt), -1); return { from: first, to: last < today ? last : today };
+    }
+    if (m === 'custom') {
+      let f = r.from || addDays(today, -29), t = r.to || today; if (f > t) [f, t] = [t, f];
+      return { from: f, to: t > today ? today : t };
+    }
+    return { from: anchor, to: anchor };
+  }
+  function rangeCard(pts) {
+    const today = pts.today, r = ui.rw, rg = rwRange(today), m = r.mode;
+    const earn = {}, lose = {}; let earned = 0, lost = 0, auto = 0, pendingItems = [];
+    const dayList = [];
+    for (let d = rg.from; d <= rg.to; d = addDays(d, 1)) {
+      const x = pts.days[d]; if (!x) continue;
+      dayList.push(d);
+      x.items.forEach((i) => { const k = itemKey(i.label); if (i.pts > 0) { earn[k] = (earn[k] || 0) + i.pts; earned += i.pts; } else { lose[k] = (lose[k] || 0) + i.pts; lost += i.pts; } });
+      if (x.repaid) auto += x.repaid;
+      if (!x.finished && x.pendingItems) pendingItems = x.pendingItems;
+    }
+    const reds = live(data.redemptions).filter((x) => x.date >= rg.from && x.date <= rg.to).sort((x, y) => (y.date > x.date ? 1 : y.date < x.date ? -1 : 0));
+    const spent = reds.reduce((n, x) => n + x.cost, 0);
+    const loans = live(data.loans).filter((x) => x.date >= rg.from && x.date <= rg.to);
+    const borrowed = loans.reduce((n, x) => n + x.principal, 0), fees = loans.reduce((n, x) => n + x.fee, 0);
+    const manual = live(data.repayments).filter((x) => x.date >= rg.from && x.date <= rg.to).reduce((n, x) => n + x.amount, 0);
+    const net = earned + lost - spent;
+    let endAvail = null; for (let d = rg.to; d >= rg.from && endAvail === null; d = addDays(d, -1)) if (pts.days[d] && pts.days[d].avail !== undefined) endAvail = pts.days[d].avail;
+    const label = m === 'day' ? `${fmtDow(rg.from)}, ${fmtLong(rg.from)}` : m === 'week' ? `Week of ${fmtShort(rg.from)}` : m === 'month' ? parseYmd(rg.from).toLocaleDateString([], { month: 'long', year: 'numeric' }) : `${fmtShort(rg.from)} to ${fmtShort(rg.to)}`;
+    const seg = (k, l) => `<button class="${m === k ? 'on' : ''}" data-action="rw-mode" data-v="${k}">${l}</button>`;
+    const anchor = r.date && r.date <= today ? r.date : today;
+    const ctl = m === 'custom'
+      ? `<input type="date" data-change="rw-from" value="${rg.from}" max="${today}"><span class="note">to</span><input type="date" data-change="rw-to" value="${rg.to}" max="${today}">`
+      : `<button class="btn sm" data-action="rw-step" data-dir="-1" aria-label="Previous">‹</button>${m === 'month'
+          ? `<input type="month" data-change="rw-month" value="${(r.month || today.slice(0, 7))}" max="${today.slice(0, 7)}">`
+          : `<input type="date" data-change="rw-date" value="${anchor}" max="${today}">`}<button class="btn sm" data-action="rw-step" data-dir="1" aria-label="Next">›</button>`;
+    const rows = (obj, pos) => Object.entries(obj).sort((x, y) => (pos ? y[1] - x[1] : x[1] - y[1])).map(([k, v]) => `<div class="pt-row ${pos ? 'earn' : 'pen'}"><span>${esc(k)}</span><b>${sgn(v)}</b></div>`).join('');
+    const dayRows = m === 'day' ? '' : (dayList.length ? [...dayList].reverse().map((d) => { const x = pts.days[d], open = !!ui.rw.open[d]; return `
+          <div class="pd ${open ? 'open' : ''}"><div class="pd-head" data-action="pt-open" data-date="${d}"><span class="caret">›</span><span class="grow">${fmtDow(d)}, ${fmtShort(d)}${isRest(d) ? ' <span class="pill rest">Rest</span>' : ''}${x.finished ? '' : ' <span class="note">so far</span>'}</span><b class="${x.total < 0 ? 'neg' : 'pos'}">${sgn(x.total)}</b></div>
+          ${open ? `<div class="pd-body">${x.items.length ? itemRows(x.items) : '<div class="note">Nothing earned or lost.</div>'}${x.repaid ? `<div class="pt-row loan"><span>Auto-repaid to your loan</span><b>−${x.repaid}</b></div>` : ''}</div>` : ''}</div>`; }).join('') : '');
+    return `
+      <div class="card"><h2>Earnings and spending <small>${esc(label)}</small></h2>
+        <div class="rg-ctl"><div class="seg">${seg('day', 'Day')}${seg('week', 'Week')}${seg('month', 'Month')}${seg('custom', 'Custom')}</div><div class="rg-nav">${ctl}</div></div>
+        ${dayList.length || reds.length ? `
+        <div class="rg-stats">
+          <div><span class="lbl">Earned</span><b class="pos">${sgn(earned)}</b></div>
+          <div><span class="lbl">Lost</span><b class="${lost < 0 ? 'neg' : ''}">${sgn(lost)}</b></div>
+          <div><span class="lbl">Spent</span><b class="${spent ? 'neg' : ''}">${spent ? '−' + spent : '0'}</b></div>
+          <div><span class="lbl">Net</span><b class="${net < 0 ? 'neg' : 'pos'}">${sgn(net)}</b></div>
+        </div>
+        ${endAvail !== null ? `<div class="note" style="margin:-4px 0 10px">Available points at the end of ${m === 'day' ? 'the day' : 'the period'}: <b>${endAvail.toLocaleString('en-IN')}</b></div>` : ''}
+        ${Object.keys(earn).length ? `<div class="rg-sec"><div class="lbl">Earned</div>${rows(earn, true)}</div>` : ''}
+        ${Object.keys(lose).length ? `<div class="rg-sec"><div class="lbl">Lost</div>${rows(lose, false)}</div>` : ''}
+        ${pendingItems.length ? `<div class="pt-pending"><div class="lbl">If today ended now</div>${itemRows(pendingItems)}<div class="note">Penalties are only applied when the day ends.</div></div>` : ''}
+        ${reds.length ? `<div class="rg-sec"><div class="lbl">Spent on rewards</div>${reds.map((x) => `<div class="pt-row pen"><span>${esc(x.name)} <span class="note">${fmtShort(x.date)}</span></span><b>−${x.cost}</b></div>`).join('')}</div>` : ''}
+        ${borrowed || manual || auto ? `<div class="rg-sec"><div class="lbl">Loan</div>
+          ${borrowed ? `<div class="pt-row loan"><span>Borrowed (fee ${fees} added to the debt)</span><b>+${borrowed}</b></div>` : ''}
+          ${manual ? `<div class="pt-row loan"><span>Repaid by you</span><b>−${manual}</b></div>` : ''}
+          ${auto ? `<div class="pt-row loan"><span>Auto-repaid</span><b>−${auto}</b></div>` : ''}</div>` : ''}
+        ${dayRows ? `<div class="rg-sec"><div class="lbl">Days <span class="note">(tap a day for the breakdown)</span></div>${dayRows}</div>` : ''}`
+        : '<div class="note">No points data for this period yet.</div>'}
+      </div>`;
+  }
+
   function pageRewards() {
     const pts = computePoints(), v = ptv(), today = pts.today, lv = levelOf(pts.L), cfg = data.pointsCfg;
     const td = pts.days[today];
@@ -2450,13 +2523,7 @@
           : '<div class="note">Nothing redeemed yet.</div>'}
       </div>`;
 
-    const days = `
-      <div class="card"><h2>Recent days <small>tap a day for the breakdown</small></h2>
-        ${recent.length ? recent.map((d) => { const x = pts.days[d], open = !!ui.rw.open[d]; return `
-          <div class="pd ${open ? 'open' : ''}"><div class="pd-head" data-action="pt-open" data-date="${d}"><span class="caret">›</span><span class="grow">${fmtDow(d)}, ${fmtShort(d)}${isRest(d) ? ' <span class="pill rest">Rest</span>' : ''}</span><b class="${x.total < 0 ? 'neg' : 'pos'}">${sgn(x.total)}</b></div>
-          ${open ? `<div class="pd-body">${x.items.length ? itemRows(x.items) : '<div class="note">Nothing earned or lost.</div>'}${x.repaid ? `<div class="pt-row loan"><span>Auto-repaid to your loan</span><b>−${x.repaid}</b></div>` : ''}</div>` : ''}</div>`; }).join('')
-          : '<div class="note">Finished days will appear here.</div>'}
-      </div>`;
+    const days = rangeCard(pts);
 
     const locked = ptLocked(), dis = locked ? 'disabled' : '';
     const lockBox = locked
@@ -2738,6 +2805,13 @@
     },
     'pt-set-toggle': () => { ui.rw.set = !ui.rw.set; try { localStorage.setItem('st-pt-set', ui.rw.set ? '1' : '0'); } catch (e) { /* ignore */ } render(); },
     'log-all': () => { ui.rw.logAll = !ui.rw.logAll; render(); },
+    'rw-mode': (el) => { ui.rw.mode = el.dataset.v; if (ui.rw.mode === 'custom') { const t = todayStr(); ui.rw.from = ui.rw.from || addDays(t, -29); ui.rw.to = ui.rw.to || t; } render(); },
+    'rw-step': (el) => {
+      const dir = +el.dataset.dir, today = todayStr(), r = ui.rw;
+      if (r.mode === 'month') { const ym = r.month || today.slice(0, 7), d = parseYmd(ym + '-01'); d.setMonth(d.getMonth() + dir); const nm = ymd(d).slice(0, 7); r.month = nm > today.slice(0, 7) ? today.slice(0, 7) : nm; }
+      else { const cur = r.date && r.date <= today ? r.date : today, nx = addDays(cur, dir * (r.mode === 'week' ? 7 : 1)); r.date = nx > today ? today : nx; }
+      render();
+    },
     'pt-open': (el) => { ui.rw.open[el.dataset.date] = !ui.rw.open[el.dataset.date]; render(); },
     'pt-reset': () => {
       if (ptLocked()) { toast(lockMsg()); return; }
@@ -2938,6 +3012,10 @@
       ptLog(`Loan auto-repay turned ${el.checked ? 'on' : 'off'}`);
       persist(true); render();
     },
+    'rw-date': (el) => { if (el.value) { ui.rw.date = el.value > todayStr() ? todayStr() : el.value; render(); } },
+    'rw-month': (el) => { if (el.value) { ui.rw.month = el.value; render(); } },
+    'rw-from': (el) => { if (el.value) { ui.rw.from = el.value; render(); } },
+    'rw-to': (el) => { if (el.value) { ui.rw.to = el.value; render(); } },
     'pt-planby': (el) => {
       if (ptLocked()) { toast(lockMsg()); render(); return; }
       if (el.value && el.value !== data.pointsCfg.planBy) { ptLog(`Plan the day by: ${data.pointsCfg.planBy} → ${el.value}`); data.pointsCfg.planBy = el.value; touch(data.pointsCfg); persist(true); render(); }
