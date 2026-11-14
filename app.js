@@ -943,29 +943,44 @@
     return out.sort((x, y) => x.st - y.st || y.en - x.en);
   }
   function actualBlocksHtml(raw, W0, from, tlh) {
-    const W1 = W0 + 86400000, now = Date.now(), MIN_VIS = Math.ceil(20 / tlh * 60), cap = gapCapMin() * 60000;
-    const clip = (o) => { const s = (Math.max(o.st, W0) - W0) / 60000, e = (Math.min(o.en, W1) - W0) / 60000; return { ...o, s, e, ev: Math.max(e, s + MIN_VIS) }; };
+    const W1 = W0 + 86400000, now = Date.now(), cap = gapCapMin() * 60000, MERGE = 5 * 60000;
+    const clip = (o) => { const s = (Math.max(o.st, W0) - W0) / 60000, e = (Math.min(o.en, W1) - W0) / 60000; return { ...o, s, e }; };
+    // gaps are worked out from the real entries (unchanged)
     const gaps = []; let cur = null;
     raw.forEach((o) => { if (cur !== null && o.st - cur >= 60000 && o.st - cur <= cap) gaps.push({ st: cur, en: o.st }); cur = cur === null ? o.en : Math.max(cur, o.en); });
     if (cur !== null && now > cur && now - cur <= cap && now > W0 && now < W1) gaps.push({ st: cur, en: now }); // time since the last entry counts as break too
-    const items = raw.map(clip);
+    // for drawing only: stop-and-resume pieces of the same topic (a few minutes apart) are shown as one bar
+    const disp = [];
+    raw.forEach((o) => {
+      const p = disp[disp.length - 1];
+      if (p && !p.run && !o.run && p.type === o.type && (p.topic || '').toLowerCase() === (o.topic || '').toLowerCase() && o.st - p.en <= MERGE) {
+        p.en = Math.max(p.en, o.en); p.full += o.full; p.count += 1; p.linked = p.linked || o.linked; if (o.focus) p.focus = o.focus;
+      } else disp.push({ ...o, count: 1 });
+    });
+    const items = disp.map(clip);
+    // side-by-side columns only for entries that genuinely overlap in time
     let cluster = [], cEnd = -1, laneEnds = [];
     const flush = () => { const n = Math.max(1, ...cluster.map((i) => i.lane + 1)); cluster.forEach((i) => { i.n = n; }); cluster = []; };
     items.forEach((it) => {
-      if (it.s >= cEnd) { flush(); laneEnds = []; cEnd = it.ev; } else cEnd = Math.max(cEnd, it.ev);
+      if (it.s >= cEnd) { flush(); laneEnds = []; cEnd = it.e; } else cEnd = Math.max(cEnd, it.e);
       let l = laneEnds.findIndex((e) => e <= it.s);
-      if (l < 0) { l = laneEnds.length; laneEnds.push(it.ev); } else laneEnds[l] = it.ev;
+      if (l < 0) { l = laneEnds.length; laneEnds.push(it.e); } else laneEnds[l] = it.e;
       it.lane = l; cluster.push(it);
     });
     flush();
     const gapHtml = gaps.map((g) => { const s = clip(g); return `<div class="ab gap" title="Gap, counted as break · ${hmOf(g.st)}–${hmOf(g.en)}" style="top:${(s.s - from) / 60 * tlh}px;height:${Math.max(2, (s.e - s.s) / 60 * tlh)}px"></div>`; }).join('');
-    const blocks = items.map((o) => {
+    const blocks = items.map((o, idx) => {
       const label = esc(o.topic || defaultLabel(o.type)), c = cat(o.type);
       const dur = o.run ? 'running' : short(o.full);
       const action = o.run ? 'data-action="nav" data-page="today"' : `data-action="entry-edit" data-id="${o.id}"`;
-      return `<div class="ab ${o.run ? 'run' : ''}" ${action} title="${label} · ${hmOf(o.st)}–${hmOf(o.en)} · ${dur}"
-        style="--c:${c.color};top:${(o.s - from) / 60 * tlh}px;height:${Math.max(18, (o.e - o.s) / 60 * tlh)}px;left:calc(${o.lane / o.n * 100}% + 2px);width:calc(${100 / o.n}% - 4px)">
-        <b>${o.linked ? '⇄ ' : ''}${label}</b><span>${o.st < W0 ? '…' : ''}${hmOf(o.st)}–${hmOf(o.en)}${o.en > W1 ? '…' : ''} · ${dur}${o.focus ? ' · ★' + o.focus : ''}</span></div>`;
+      // short entries are drawn at their true length, only stretched a little for legibility while the next entry is further away
+      const nat = (o.e - o.s) / 60 * tlh, next = items.slice(idx + 1).find((x) => x.s > o.s), room = next ? (next.s - o.s) / 60 * tlh - 1 : 20;
+      const h = Math.max(nat, Math.min(20, room), 7);
+      const size = h >= 34 ? '' : h >= 15 ? ' s' : ' xs';
+      const rep = o.count > 1 ? ` ×${o.count}` : '';
+      return `<div class="ab${size} ${o.run ? 'run' : ''}" ${action} title="${label}${rep} · ${hmOf(o.st)}–${hmOf(o.en)} · ${dur}"
+        style="--c:${c.color};top:${(o.s - from) / 60 * tlh}px;height:${h}px;left:calc(${o.lane / o.n * 100}% + 2px);width:calc(${100 / o.n}% - 4px)">
+        <b>${o.linked ? '⇄ ' : ''}${label}</b><span>${o.st < W0 ? '…' : ''}${hmOf(o.st)}–${hmOf(o.en)}${o.en > W1 ? '…' : ''} · ${dur}${rep}${o.focus ? ' · ★' + o.focus : ''}</span></div>`;
     }).join('');
     return gapHtml + blocks;
   }
