@@ -222,7 +222,7 @@
     donut: { mode: 'type', sel: null },
     imp: { text: false },
     lib: { org: false, sel: [] },
-    rw: { open: {}, mode: 'day', date: null, month: null, from: null, to: null, logAll: false, set: (() => { try { return localStorage.getItem('st-pt-set') === '1'; } catch (e) { return false; } })() },
+    rw: { open: {}, goalsDone: false, mode: 'day', date: null, month: null, from: null, to: null, logAll: false, set: (() => { try { return localStorage.getItem('st-pt-set') === '1'; } catch (e) { return false; } })() },
     form: { type: 'study', topic: '', priority: 'medium', mode: 'stopwatch', minutes: 25 },
     prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr(), incOther: false, open: {} }
   };
@@ -2444,6 +2444,86 @@
       </div>`;
   }
 
+  // ---- Today's goals: what is left to earn today, with progress
+  function planDeadline(d) {
+    const v = ptv(), cfg = data.pointsCfg;
+    const sl = live(data.sessions).filter((s) => s.date === d && kindOf(s.type) === 'sleep').sort((x, y) => y.seconds - x.seconds)[0];
+    const by = String(cfg.planBy || '08:00').split(':'), cut = parseYmd(d); cut.setHours(+by[0] || 8, +by[1] || 0, 0, 0);
+    return sl ? { limit: sl.start + sl.seconds * 1000 + v.planWindow * 60000, text: `within ${v.planWindow} min of waking` } : { limit: cut.getTime(), text: `by ${cfg.planBy || '08:00'}` };
+  }
+  function goalsCardHtml(pts) {
+    const v = ptv(), today = pts.today, now = Date.now(), td = pts.days[today];
+    const goalSec = data.settings.dailyGoalMin * 60, st = pts.studyToday;
+    const sess = live(data.sessions).filter((s) => s.date === today), tm = data.timer;
+    const tmEl = tm ? Math.round(elapsedMs(tm) / 1000) : 0;
+    const earnedLabels = new Set(((td && td.items) || []).map((i) => itemKey(i.label)));
+    const goals = [];
+    const push = (g) => goals.push(g);
+    // 1. plan the day
+    if (v.plan > 0) {
+      if (earnedLabels.has('Planned early')) push({ id: 'plan', name: 'Plan your day', pts: v.plan, state: 'done' });
+      else { const dl = planDeadline(today), left = Math.ceil((dl.limit - now) / 60000);
+        if (left > 0) push({ id: 'plan', name: 'Plan your day', pts: v.plan, state: 'open', note: `Make a plan in the Timetable ${dl.text}${left < 180 ? ` · ${left} min left` : ''}`, urgent: true });
+        else push({ id: 'plan', name: 'Plan your day', pts: v.plan, state: 'missed', note: `The window (${dl.text}) has passed` }); }
+    }
+    // 2. daily goal
+    if (v.goal > 0 && goalSec > 0) push({ id: 'goal', name: 'Daily study goal', pts: v.goal, state: st >= goalSec ? 'done' : 'open', pct: st / goalSec * 100, note: `${short(st)} of ${short(goalSec)}` });
+    // 3. study blocks
+    { const plan = resolvePlan(today), blocks = plan.blocks.filter((b) => kindOf(b.type) === 'study' && !plan.skipped.includes(b.id));
+      if (blocks.length && (v.blockH || v.blockM || v.blockL)) {
+        let done = 0, left = 0;
+        blocks.forEach((b) => {
+          const dur = blockDur(b) * 60; let act = sess.filter((s) => s.planDate === today && s.blockId === b.id).reduce((n, s) => n + s.seconds, 0);
+          if (tm && tm.blockId === b.id && tm.planDate === today) act += tmEl;
+          const ok = dur > 0 && (act >= dur * 0.9 || (act > 0 && (plan.completed || []).includes(b.id)));
+          if (ok) done++; else left += b.priority === 'high' ? v.blockH : b.priority === 'low' ? v.blockL : v.blockM;
+        });
+        push({ id: 'blocks', name: 'Study blocks', pts: left, state: done === blocks.length ? 'done' : 'open', pct: done / blocks.length * 100, note: `${done} of ${blocks.length} done${left ? ` · +${left} still to earn` : ''}` });
+      } }
+    // 4. stretch goal
+    if (v.stretch > 0 && goalSec > 0 && v.stretchMin * 60 > goalSec) push({ id: 'stretch', name: 'Stretch goal', pts: v.stretch, state: st >= v.stretchMin * 60 ? 'done' : 'open', pct: st / (v.stretchMin * 60) * 100, note: `${short(st)} of ${short(v.stretchMin * 60)}` });
+    // 5. workout
+    if (v.workout30 > 0 && v.workoutMax > 0) {
+      let w = sess.filter((s) => kindOf(s.type) !== 'study' && kindOf(s.type) !== 'sleep' && isWorkout(s)).reduce((n, s) => n + s.seconds, 0);
+      if (tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isWorkout(tm)) w += tmEl;
+      const cap = v.workoutMax * 1800;
+      push({ id: 'workout', name: 'Workout', pts: Math.round(cap / 60 * v.workout30 / 30), state: w >= cap ? 'done' : 'open', pct: w / cap * 100, note: `${short(w)} of ${short(cap)} counted` });
+    }
+    // 6. focused sessions (a running count, never "done")
+    if (v.focus > 0) { const n = sess.filter((s) => kindOf(s.type) === 'study' && s.focus >= 4 && s.seconds >= 1800).length;
+      push({ id: 'focus', name: 'Focused sessions', pts: v.focus, state: 'count', note: `${n} so far · +${v.focus} each (rated 4–5, 30+ min)` }); }
+    // 7. daily ticks
+    const ci = data.checkins[today];
+    [['checkin', 'Evening check-in', v.checkin, !!(ci && (ci.mood || ci.focus)), 'Rate your mood and focus on the Today page'],
+     ['journal', 'Journal entry', v.journal, !!(((data.journal[today] && data.journal[today].text) || '').trim()), 'Write a line in your journal'],
+     ['sleep', 'Sleep logged', v.sleep, sess.some((s) => kindOf(s.type) === 'sleep'), 'Log last night’s sleep']].forEach(([id, name, p, ok, note]) => { if (p > 0) push({ id, name, pts: p, state: ok ? 'done' : 'open', note }); });
+    // 8. streak milestone
+    { const cur = streak(), next = [3, 7, 30].find((m) => m > cur);
+      if (next && v['streak' + next] > 0) push({ id: 'streak', name: `${next}-day streak`, pts: v['streak' + next], state: 'open', pct: cur / next * 100, note: `${cur} of ${next} days${cur + 1 === next ? ' · study today to get it' : ''}` }); }
+    // 9. every subject this week
+    { const subs = live(data.subjects).filter((s) => live(data.topics).some((t) => t.subjectId === s.id));
+      if (subs.length && v.allSubjects > 0) {
+        const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t])), cov = new Set();
+        for (let d = weekStart(today); d <= today; d = addDays(d, 1)) live(data.sessions).filter((s) => s.date === d && kindOf(s.type) === 'study').forEach((s) => { const t = tmap.get(s.topic.toLowerCase()); if (t && t.subjectId) cov.add(t.subjectId); });
+        const n = subs.filter((s) => cov.has(s.id)).length;
+        push({ id: 'subjects', name: 'Every subject this week', pts: v.allSubjects, state: n === subs.length ? 'done' : 'open', pct: n / subs.length * 100, note: `${n} of ${subs.length} subjects · paid on Sunday` });
+      } }
+    const open = goals.filter((g) => g.state === 'open' || g.state === 'count'), done = goals.filter((g) => g.state === 'done'), missed = goals.filter((g) => g.state === 'missed');
+    open.sort((x, y) => (y.urgent ? 1 : 0) - (x.urgent ? 1 : 0));
+    const row = (g) => `<div class="gl ${g.state}${g.urgent ? ' urgent' : ''}">
+        <div class="gl-top"><span class="gl-nm">${g.state === 'done' ? '<span class="gl-ck">✓</span>' : ''}${esc(g.name)}</span><span class="gl-pts">${g.state === 'count' ? '+' + g.pts + ' each' : g.pts ? '+' + g.pts : ''}</span></div>
+        ${g.pct !== undefined && g.state !== 'done' ? `<div class="bar"><i style="width:${Math.min(100, Math.max(0, g.pct))}%"></i></div>` : ''}
+        ${g.note && g.state !== 'done' ? `<div class="gl-note">${esc(g.note)}</div>` : ''}</div>`;
+    const waived = goalWaived(today) ? `<div class="pt-pending" style="margin:0 0 12px"><div class="note">${boughtPass(today) ? 'Goal pass active' : 'Rest day'}: today's goal is waived, so goal-gated rewards are unlocked.</div></div>` : '';
+    const doneRows = done.concat(missed);
+    return `
+      <div class="card"><h2>Today’s goals <small>Earned today ${sgn(td ? td.earned : 0)}</small></h2>
+        ${waived}
+        ${open.length ? `<div class="gl-list">${open.map(row).join('')}</div>` : '<div class="note">Everything is done for today. Nice work.</div>'}
+        ${doneRows.length ? `<div class="gl-done"><button class="linkbtn" data-action="gl-toggle">${ui.rw.goalsDone ? 'Hide' : 'Show'} finished (${doneRows.length})</button>${ui.rw.goalsDone ? `<div class="gl-list" style="margin-top:10px">${doneRows.map(row).join('')}</div>` : ''}</div>` : ''}
+      </div>`;
+  }
+
   function pageRewards() {
     const pts = computePoints(), v = ptv(), today = pts.today, lv = levelOf(pts.L), cfg = data.pointsCfg;
     const td = pts.days[today];
@@ -2524,6 +2604,7 @@
       </div>`;
 
     const days = rangeCard(pts);
+    const goalsCard = goalsCardHtml(pts);
 
     const locked = ptLocked(), dis = locked ? 'disabled' : '';
     const lockBox = locked
@@ -2555,9 +2636,10 @@
       <div class="page-head"><div><h1>Rewards</h1><p class="sub">Earn points for studying, spend them on rewards you choose</p></div></div>
       <div class="stack">
         ${header}
+        ${goalsCard}
         <div class="grid">
           <div class="stack">${loanCard}${shop}${history}</div>
-          <div class="stack">${todayCard}${chart}${days}${settings}${logCard}</div>
+          <div class="stack">${chart}${days}${settings}${logCard}</div>
         </div>
       </div>`;
   }
@@ -2805,6 +2887,7 @@
     },
     'pt-set-toggle': () => { ui.rw.set = !ui.rw.set; try { localStorage.setItem('st-pt-set', ui.rw.set ? '1' : '0'); } catch (e) { /* ignore */ } render(); },
     'log-all': () => { ui.rw.logAll = !ui.rw.logAll; render(); },
+    'gl-toggle': () => { ui.rw.goalsDone = !ui.rw.goalsDone; render(); },
     'rw-mode': (el) => { ui.rw.mode = el.dataset.v; if (ui.rw.mode === 'custom') { const t = todayStr(); ui.rw.from = ui.rw.from || addDays(t, -29); ui.rw.to = ui.rw.to || t; } render(); },
     'rw-step': (el) => {
       const dir = +el.dataset.dir, today = todayStr(), r = ui.rw;
