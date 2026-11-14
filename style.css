@@ -540,3 +540,5 @@ input[type=color] { width: 100%; height: 42px; padding: 3px; border: 1px solid v
 .pt-row.loan b { color: var(--muted); }
 
 .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+[hidden] { display: none !important; }

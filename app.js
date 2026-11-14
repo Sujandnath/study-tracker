@@ -222,7 +222,7 @@
     donut: { mode: 'type', sel: null },
     imp: { text: false },
     lib: { org: false, sel: [] },
-    rw: { open: {}, logAll: false },
+    rw: { open: {}, logAll: false, set: (() => { try { return localStorage.getItem('st-pt-set') === '1'; } catch (e) { return false; } })() },
     form: { type: 'study', topic: '', priority: 'medium', mode: 'stopwatch', minutes: 25 },
     prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr(), incOther: false, open: {} }
   };
@@ -2094,9 +2094,9 @@
   //  timetable, check-ins, journal, sleep). Only rewards, redeemed items and
   //  the point settings are stored.
   // =====================================================================
-  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, blockH: 30, blockM: 20, blockL: 10, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30 };
+  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, blockH: 30, blockM: 20, blockL: 10, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30 };
   const PT_LABELS = [
-    ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
+    ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
     ['blockH', 'Study block done: high'], ['blockM', 'Study block done: medium'], ['blockL', 'Study block done: low'],
     ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
@@ -2150,8 +2150,15 @@
       add(`Study ${short(study)}`, Math.round(study / 60 * v.study30 / 30), 'earn'); // every minute counts
       if (goal > 0 && study >= goal) add('Daily goal reached', v.goal, 'earn');
       if (goal > 0 && v.stretchMin * 60 > goal && study >= v.stretchMin * 60) add('Stretch goal reached', v.stretch, 'earn');
-      { const own = data.plans[d], by = String(cfg.planBy || '08:00').split(':'), cut = parseYmd(d); cut.setHours(+by[0] || 8, +by[1] || 0, 0, 0);
-        if (own && !own.deleted && own.createdAt && (own.blocks || []).length && own.createdAt <= cut.getTime()) add('Planned the day early', v.plan, 'earn'); }
+      { // planning bonus: within the window after you wake (longest sleep of the day); falls back to the fixed time if no sleep is logged
+        const sl = list.filter((s) => kindOf(s.type) === 'sleep').sort((x, y) => y.seconds - x.seconds)[0];
+        const by = String(cfg.planBy || '08:00').split(':'), cut = parseYmd(d); cut.setHours(+by[0] || 8, +by[1] || 0, 0, 0);
+        const limit = sl ? sl.start + sl.seconds * 1000 + v.planWindow * 60000 : cut.getTime();
+        const own = data.plans[d];
+        const planned = own && !own.deleted && own.createdAt && (own.blocks || []).length && own.createdAt <= limit;
+        const session = list.some((s) => kindOf(s.type) !== 'sleep' && /plan/i.test(s.topic) && s.start <= limit) || (isToday && tm && /plan/i.test(tm.topic || '') && tm.startWall <= limit);
+        if (planned || session) add('Planned the day early', v.plan, 'earn');
+      }
       let wsec = list.filter((s) => kindOf(s.type) !== 'study' && kindOf(s.type) !== 'sleep' && isWorkout(s)).reduce((n, s) => n + s.seconds, 0);
       if (isToday && tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isWorkout(tm)) wsec += tmElapsed;
       const wmin = Math.min(wsec / 60, v.workoutMax * 30), wpts = Math.round(wmin * v.workout30 / 30);
@@ -2417,14 +2424,16 @@
         ${logs.length > 10 ? `<div style="margin-top:8px"><button class="linkbtn" data-action="log-all">${logAll ? 'Show latest 10' : `Show all ${logs.length}`}</button></div>` : ''}
       </div>`;
     const settings = `
-      <div class="card"><h2>Points settings</h2>
+      <div class="card"><h2>Points settings <button class="btn sm" data-action="pt-set-toggle">${ui.rw.set ? 'Hide' : 'Show'}</button></h2>
         ${lockBox}
+        <div ${ui.rw.set ? '' : 'hidden'}>
         <div class="field"><label>Count points from</label><input type="date" data-change="pt-start" value="${cfg.startDate}" ${dis}></div>
-        <div class="field"><label>Plan the day in the timetable by (earns the planning bonus)</label><input type="time" data-change="pt-planby" value="${esc(cfg.planBy || '08:00')}" ${dis}></div>
+        <div class="field"><label>Fallback planning time when no sleep is logged</label><input type="time" data-change="pt-planby" value="${esc(cfg.planBy || '08:00')}" ${dis}></div>
         <div class="field"><label class="chk"><input type="checkbox" data-change="pt-pen" ${cfg.penalties ? 'checked' : ''} ${dis}> Deduct points for missed goals and blocks</label></div>
         <div class="pt-grid">${PT_LABELS.map(([k, l]) => `<label class="pt-set"><span>${l}</span><input type="number" min="0" step="1" data-change="pt-val" data-key="${k}" value="${v[k]}" ${dis}></label>`).join('')}</div>
         <div class="row" style="margin-top:12px"><button class="btn" data-action="pt-reset" ${dis}>Reset to defaults</button></div>
         <p class="note" style="margin-top:12px">Changing a value recalculates your whole history. Rest days (including ones you buy), skipped blocks, sleep and untracked gaps never cost points, and your score never goes below zero.</p>
+        </div>
       </div>`;
 
     return `
@@ -2677,6 +2686,7 @@
       data.repayments.push(rec); ptLog(`Repaid ${amt} of the loan`); persist(true); render();
       toast(amt >= pts.debt ? 'Loan cleared' : `Repaid ${amt} points`, () => { rec.deleted = true; touch(rec); persist(true); render(); });
     },
+    'pt-set-toggle': () => { ui.rw.set = !ui.rw.set; try { localStorage.setItem('st-pt-set', ui.rw.set ? '1' : '0'); } catch (e) { /* ignore */ } render(); },
     'log-all': () => { ui.rw.logAll = !ui.rw.logAll; render(); },
     'pt-open': (el) => { ui.rw.open[el.dataset.date] = !ui.rw.open[el.dataset.date]; render(); },
     'pt-reset': () => {
