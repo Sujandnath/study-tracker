@@ -425,7 +425,7 @@
       ensureTopic(t.topic, t.type, t.priority);
       ui.date = sessionDate(t.type, t.startWall, secs);
       toast(`Saved ${short(secs)} of ${name}`);
-      const after = () => { if (secs >= 60 && isWork({ type: t.type }) && data.settings.askFocus !== false) setTimeout(() => focusPrompt(sid), 0); };
+      const after = () => { if (secs >= 60 && kindOf(t.type) === 'study' && data.settings.askFocus !== false) setTimeout(() => focusPrompt(sid), 0); };
       if (ask) setTimeout(() => completePrompt(ask.date, ask.b, ask.total, ask.dur, after), 0); else after();
     } else if (save) {
       toast('Too short to save (under 1 second)');
