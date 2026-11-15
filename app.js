@@ -108,6 +108,7 @@
       subjects: [],
       rewards: [],
       redemptions: [],
+      pauses: [],
       pointsCfg: { updatedAt: 0, startDate: todayStr(), penalties: true, v: {}, lockUntil: 0 },
       pointsLog: [],
       loans: [],
@@ -125,7 +126,7 @@
       categories: BUILTIN_CATS.map((b) => ({ ...b, updatedAt: 0 })),
       plans: {},
       templates: [],
-      settings: { dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, blockMin: 60, updatedAt: t },
+      settings: { dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, blockMin: 60, pauseBudget: 10, longPause: 15, updatedAt: t },
       timer: null,
       timerUpdatedAt: 0
     };
@@ -135,7 +136,7 @@
     d = d && typeof d === 'object' ? d : base;
     d.version = 1;
     d.deviceId = d.deviceId || base.deviceId;
-    for (const k of ['topics', 'subjects', 'rewards', 'redemptions', 'pointsLog', 'loans', 'repayments', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
+    for (const k of ['topics', 'subjects', 'rewards', 'redemptions', 'pauses', 'pointsLog', 'loans', 'repayments', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
     if (!d.plans || typeof d.plans !== 'object' || Array.isArray(d.plans)) d.plans = {};
     if (!Array.isArray(d.categories)) d.categories = [];
     BUILTIN_CATS.forEach((b) => { if (!d.categories.some((x) => x.id === b.id)) d.categories.push({ ...b, updatedAt: 0 }); });
@@ -154,7 +155,7 @@
     d.important.title = d.important.title || 'Main topics';
     d.important.titleAt = d.important.titleAt || 0;
     if (!Array.isArray(d.important.items)) d.important.items = [];
-    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, blockMin: 60, updatedAt: 0 }, d.settings || {});
+    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, blockMin: 60, pauseBudget: 10, longPause: 15, updatedAt: 0 }, d.settings || {});
     if (!d.timer) d.timer = null;
     return d;
   }
@@ -174,6 +175,7 @@
     out.subjects = mergeById(out.subjects, inc.subjects);
     out.rewards = mergeById(out.rewards, inc.rewards);
     out.redemptions = mergeById(out.redemptions, inc.redemptions);
+    out.pauses = mergeById(out.pauses, inc.pauses);
     out.pointsLog = mergeById(out.pointsLog, inc.pointsLog);
     out.loans = mergeById(out.loans, inc.loans);
     out.repayments = mergeById(out.repayments, inc.repayments);
@@ -382,7 +384,7 @@
     const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
     try { return JSON.parse(text); } catch { return null; }
   }
-  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, rewards: d.rewards, redemptions: d.redemptions, pointsCfg: d.pointsCfg, pointsLog: d.pointsLog, loans: d.loans, repayments: d.repayments, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
+  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, rewards: d.rewards, redemptions: d.redemptions, pauses: d.pauses, pointsCfg: d.pointsCfg, pointsLog: d.pointsLog, loans: d.loans, repayments: d.repayments, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
 
   async function runSync() {
     if (!sync.token) return;
@@ -499,21 +501,59 @@
     ui.page = 'today'; ui.date = todayStr();
     render();
   }
+  const PAUSE_REASONS = [['water', '💧', 'Water'], ['phone', '📱', 'Phone'], ['washroom', '🚻', 'Washroom'], ['distracted', '🌀', 'Distracted'], ['other', '✨', 'Other']];
+  const pmm = (s) => { s = Math.max(0, Math.floor(s)); return s >= 3600 ? hms(s) : String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+  const pauseBudgetMin = () => (data.settings.pauseBudget === undefined ? 10 : data.settings.pauseBudget);
+  const longPauseMin = () => (data.settings.longPause === undefined ? 15 : data.settings.longPause);
+  // soft allowance: N minutes of pause for every hour of session (at least one hour's worth)
+  function pauseAllowance(t, ps) {
+    const b = pauseBudgetMin(); if (!b) return 0;
+    const span = elapsedMs(t) / 1000 + (t.pauseSec || 0) + ps;
+    return b * 60 * Math.max(1, span / 3600);
+  }
   function pauseTimer() {
     const t = data.timer; if (!t || !t.startedAt) return;
-    t.accumulatedMs = elapsedMs(t); t.startedAt = null; data.timerUpdatedAt = Date.now();
-    persist(true); render();
+    t.accumulatedMs = elapsedMs(t); t.startedAt = null; t.pausedAt = Date.now(); t.pauseAlerted = false; t.overAlerted = false; data.timerUpdatedAt = Date.now();
+    ui.tAnim = 'pause'; persist(true); render();
+  }
+  // closes the current pause; a pause of a minute or more becomes a pause record (separate from break time)
+  function endPause(t) {
+    if (!t || !t.pausedAt) return null;
+    const start = t.pausedAt, ms = Date.now() - start;
+    t.pausedAt = null; t.pauseAlerted = false; t.overAlerted = false;
+    if (ms < 60000) return null;
+    const rec = touch({ id: uid(), date: sessionDate(t.type, start, 0), start, seconds: Math.round(ms / 1000), reason: '', topic: t.topic || defaultLabel(t.type), type: t.type, sessionId: t.id ? 'tm-' + t.id : '' });
+    data.pauses.push(rec);
+    t.pauseSec = (t.pauseSec || 0) + rec.seconds; t.pauseN = (t.pauseN || 0) + 1;
+    return rec;
   }
   function resumeTimer() {
     const t = data.timer; if (!t || t.startedAt) return;
+    ui.lastPause = t.pausedAt ? Math.round((Date.now() - t.pausedAt) / 1000) : 0;
+    const rec = endPause(t);
     t.startedAt = Date.now(); data.timerUpdatedAt = Date.now();
-    persist(true); render();
+    ui.tAnim = 'run'; persist(true); render();
+    if (rec) askPauseReason(rec.id);
   }
-  function stopTimer(save) {
+  let paskT = null;
+  function hidePask() { const el = $('#pask'); if (!el) return; clearTimeout(paskT); el.classList.add('out'); setTimeout(() => { if (el.classList.contains('out')) el.remove(); }, 260); }
+  function askPauseReason(id) {
+    const p = data.pauses.find((x) => x.id === id); if (!p) return;
+    const old = $('#pask'); if (old) old.remove();
+    const el = document.createElement('div'); el.id = 'pask'; el.className = 'pask';
+    el.innerHTML = `<div class="pask-t"><span class="pask-ic">⏸</span><div><b>Paused ${short(p.seconds)}</b><span>What pulled you away?</span></div></div>
+      <div class="pask-c">${PAUSE_REASONS.map(([k, e, l]) => `<button data-action="pause-reason" data-id="${id}" data-v="${k}"><i>${e}</i>${l}</button>`).join('')}<button class="skip" data-action="pause-reason" data-id="${id}" data-v="">Skip</button></div>`;
+    document.body.appendChild(el);
+    clearTimeout(paskT); paskT = setTimeout(hidePask, 20000);
+  }
+  function stopTimer(save, opts) {
     const t = data.timer; if (!t) return;
+    const quiet = !!(opts && opts.quiet), snap = JSON.parse(JSON.stringify(t));
+    const prec = save ? endPause(t) : null;
+    if (!save) t.pausedAt = null;
     const secs = Math.round(elapsedMs(t) / 1000);
     let ask = null;
-    if (save && t.blockId && secs >= 60) { // stopped early on a timetable block: was the topic finished?
+    if (save && !quiet && t.blockId && secs >= 60) { // stopped early on a timetable block: was the topic finished?
       const pl = resolvePlan(t.planDate), bb = pl.blocks.find((x) => x.id === t.blockId);
       if (bb && kindOf(bb.type) === 'study' && !pl.skipped.includes(bb.id) && !(pl.completed || []).includes(bb.id)) {
         const prior = live(data.sessions).filter((x) => x.planDate === t.planDate && x.blockId === t.blockId).reduce((n, x) => n + x.seconds, 0);
@@ -522,24 +562,53 @@
       }
     }
     data.timer = null; data.timerUpdatedAt = Date.now();
+    const sid = t.id ? 'tm-' + t.id : uid(); // same id on every device, so stopping on two devices cannot double-count
+    const restore = () => {
+      closeModal();
+      data.sessions = data.sessions.filter((x) => x.id !== sid);
+      if (prec) data.pauses = data.pauses.filter((x) => x.id !== prec.id);
+      data.timer = snap; data.timerUpdatedAt = Date.now(); persist(true); render();
+    };
     if (save && secs >= 1) {
       const name = t.topic || defaultLabel(t.type);
-      const sid = t.id ? 'tm-' + t.id : uid(); // same id on every device, so stopping on two devices cannot double-count
       data.sessions = data.sessions.filter((x) => x.id !== sid);
       data.sessions.push(touch({
         id: sid, date: sessionDate(t.type, t.startWall, secs), start: t.startWall, seconds: secs,
         topic: name, type: t.type, priority: t.priority, comment: (t.comment || '').trim(),
+        pausedSec: t.pauseSec || 0, pauses: t.pauseN || 0,
         ...(t.blockId ? { blockId: t.blockId, planDate: t.planDate } : {})
       }));
       ensureTopic(t.topic, t.type, t.priority);
       ui.date = sessionDate(t.type, t.startWall, secs);
-      toast(`Saved ${short(secs)} of ${name}`);
-      const after = () => { if (secs >= 60 && kindOf(t.type) === 'study' && data.settings.askFocus !== false) setTimeout(() => focusPrompt(sid), 0); };
+      if (!quiet) toast(`Saved ${short(secs)} of ${name}`, restore);
+      const after = () => { if (!quiet && secs >= 60 && kindOf(t.type) === 'study' && (data.settings.askFocus !== false || prec)) setTimeout(() => finishCard(sid, prec && prec.id, restore), 0); };
       if (ask) setTimeout(() => completePrompt(ask.date, ask.b, ask.total, ask.dur, after), 0); else after();
     } else if (save) {
       toast('Too short to save (under 1 second)');
+    } else if (!quiet) {
+      toast('Timer discarded', () => { data.timer = snap; data.timerUpdatedAt = Date.now(); persist(true); render(); });
     }
     persist(true); render();
+  }
+  function finishCard(sid, pauseId, restore) {
+    const s = data.sessions.find((x) => x.id === sid);
+    if (!s || s.deleted || $('#modal-root').innerHTML) return;
+    const net = s.seconds, paused = s.pausedSec || 0, n = s.pauses || 0, score = Math.round(net / (net + paused) * 100), C = 2 * Math.PI * 34;
+    const pr = pauseId ? data.pauses.find((x) => x.id === pauseId) : null;
+    const rate = data.settings.askFocus !== false;
+    choiceModal('Session complete', `
+      <div class="fc">
+        <div class="fc-ring"><svg viewBox="0 0 80 80"><circle class="bg" cx="40" cy="40" r="34"/><circle class="fg" id="fc-fg" cx="40" cy="40" r="34" stroke-dasharray="${C.toFixed(1)}" stroke-dashoffset="${C.toFixed(1)}"/></svg>
+          <div class="fc-score"><b>${score}%</b><span>focus</span></div></div>
+        <div class="fc-stats">
+          <div><b>${short(net)}</b><span>${esc(s.topic)}</span></div>
+          <div><b>${paused ? short(paused) : 'none'}</b><span>paused${n ? ` · ${n} ${n === 1 ? 'time' : 'times'}` : ''}</span></div>
+        </div>
+      </div>
+      ${pr ? `<div class="fc-why"><span class="note">Last pause (${short(pr.seconds)}): what pulled you away?</span><div class="pask-c">${PAUSE_REASONS.map(([k, e, l]) => `<button class="${pr.reason === k ? 'on' : ''}" data-action="pause-reason" data-id="${pr.id}" data-v="${k}"><i>${e}</i>${l}</button>`).join('')}</div></div>` : ''}
+      ${rate ? `<p class="note" style="margin:14px 0 8px">How focused were you?</p><div class="rate big">${[1, 2, 3, 4, 5].map((k) => `<button data-action="set-focus" data-id="${sid}" data-v="${k}"><b>${k}</b><span>${FOCUS_WORDS[k - 1]}</span></button>`).join('')}</div>` : ''}`,
+      [{ label: 'Stopped by mistake? Resume', fn: restore }, { label: rate ? 'Skip' : 'Done', cls: rate ? '' : 'primary' }]);
+    requestAnimationFrame(() => requestAnimationFrame(() => { const fg = $('#fc-fg'); if (fg) fg.style.strokeDashoffset = (C * (1 - score / 100)).toFixed(1); }));
   }
   function ensureTopic(name, type, priority) {
     name = (name || '').trim();
@@ -589,6 +658,23 @@
       if (!busy) { render(); return; }
     }
     if (!t) { mini.hidden = true; return; }
+    const paused = !t.startedAt && !!t.pausedAt, ps = paused ? Math.max(0, (nowMs - t.pausedAt) / 1000) : 0;
+    if (paused) {
+      const allowed = pauseAllowance(t, ps), used = (t.pauseSec || 0) + ps, frac = allowed ? used / allowed : 0;
+      const pc = $('#pclock'); if (pc) pc.textContent = pmm(ps);
+      const fg = $('#pfg'); if (fg) fg.style.strokeDashoffset = (339.3 * (1 - Math.min(1, allowed ? frac : Math.min(1, ps / 900)))).toFixed(1);
+      const panel = $('#ppanel'); if (panel) panel.className = 'pause-panel ' + (!allowed ? 'ok' : frac >= 1 ? 'over' : frac >= 0.75 ? 'warn' : 'ok');
+      const pn = $('#pnote'); if (pn) pn.textContent = !allowed ? (ps < 60 ? 'under a minute is not logged' : 'being logged') : frac >= 1 ? 'over your pause budget' : `${short(Math.max(0, Math.round(used)))} of ${short(Math.round(allowed))} budget`;
+      const lp = longPauseMin();
+      if (lp && !t.pauseAlerted && ps >= lp * 60) {
+        t.pauseAlerted = true; t.overAlerted = true; persist(true);
+        if (data.settings.sound !== false) ting();
+        toast(`Still on a break? You have been paused for ${short(Math.round(ps))}`);
+        try { if ('Notification' in window) { Notification.requestPermission().then((p) => { if (p === 'granted') new Notification('Still paused', { body: `${t.topic || defaultLabel(t.type)} has been paused for ${short(Math.round(ps))}` }); }); } } catch { /* ignore */ }
+      } else if (allowed && !t.overAlerted && used >= allowed) {
+        t.overAlerted = true; persist(true); toast('Over your pause budget. Resume when you are ready');
+      }
+    }
     const el = elapsedMs(t) / 1000;
     const shown = t.mode === 'countdown' ? Math.max(0, t.targetSec - el) : el;
     const over = t.mode === 'countdown' && el >= t.targetSec;
@@ -605,7 +691,7 @@
     }
 
     mini.hidden = ui.page === 'today';
-    mini.innerHTML = `<div class="m-top"><span class="pulse ${t.startedAt ? '' : 'paused'}"></span>${t.startedAt ? 'Running' : 'Paused'}</div>
+    mini.innerHTML = `<div class="m-top"><span class="pulse ${t.startedAt ? '' : 'paused'}"></span>${t.startedAt ? 'Running' : 'Paused' + (paused ? ' · ' + pmm(ps) : '')}</div>
       <div class="m-clock">${hms(shown)}</div><div class="m-topic">${esc(t.topic || defaultLabel(t.type))}</div>`;
 
     const clock = $('#clock');
@@ -617,7 +703,7 @@
       const bar = $('#tbar');
       if (bar) bar.style.width = (t.mode === 'countdown' ? Math.min(100, el / t.targetSec * 100) : t.planSec > 0 ? Math.min(100, el / t.planSec * 100) : 0) + '%';
     }
-    document.title = `${hms(shown)} · ${t.topic || defaultLabel(t.type)}`;
+    document.title = paused ? `⏸ ${pmm(ps)} paused · ${t.topic || defaultLabel(t.type)}` : `${hms(shown)} · ${t.topic || defaultLabel(t.type)}`;
   }
 
   // ---------- derived data ----------
@@ -648,8 +734,8 @@
   const gapCapMin = () => data.settings.gapCapMin || 120;
   function dayStats(d) {
     const list = sessionsOn(d), tot = totals(list), isToday = d === todayStr(), now = Date.now();
-    const iv = list.map((s) => ({ s: s.start, e: s.start + s.seconds * 1000, kind: kindOf(s.type) }));
-    if (isToday && data.timer) iv.push({ s: data.timer.startWall, e: data.timer.startWall + elapsedMs(data.timer), kind: kindOf(data.timer.type) }); // paused time is not studying
+    const iv = list.map((s) => ({ s: s.start, e: s.start + (s.seconds + (s.pausedSec || 0)) * 1000, kind: kindOf(s.type) })); // paused time is not studying, but it is not a break either
+    if (isToday && data.timer) { const tm = data.timer; iv.push({ s: tm.startWall, e: tm.startWall + elapsedMs(tm) + ((tm.pauseSec || 0) * 1000) + (!tm.startedAt && tm.pausedAt ? Date.now() - tm.pausedAt : 0), kind: kindOf(tm.type) }); }
     const sleeps = iv.filter((x) => x.kind === 'sleep').sort((x, y) => (y.e - y.s) - (x.e - x.s));
     const wake = sleeps.length ? sleeps[0].e : null;
     const occ = iv.filter((x) => x.kind !== 'sleep' || (wake !== null && x.s >= wake - 60000 && x !== sleeps[0])).sort((x, y) => x.s - y.s);
@@ -957,6 +1043,8 @@
     if (goal && w.daysElapsed) parts.push(`You reached your daily goal on <b>${w.goalDays}</b> of ${w.daysElapsed} ${w.daysElapsed === 1 ? 'day' : 'days'}.`);
     if (w.best.sec) parts.push(`Your best day was <b>${fmtDow(w.best.d)}</b> with ${short(w.best.sec)}.`);
     if (w.restDays) parts.push(`${w.restDays} rest ${w.restDays === 1 ? 'day' : 'days'} taken.`);
+    { const ts = live(data.sessions).filter((s) => s.date >= from && s.date <= to && kindOf(s.type) === 'study' && s.pausedSec !== undefined), n = ts.reduce((x, s) => x + s.seconds, 0), pz = ts.reduce((x, s) => x + (s.pausedSec || 0), 0);
+      if (n && (pz || ts.length)) parts.push(`Your focus score was <b>${Math.round(n / (n + pz) * 100)}%</b>${pz ? `, with <b>${short(pz)}</b> paused` : ' with no pauses'}.`); }
     const mood = (v) => MOODS[Math.min(4, Math.max(0, Math.round(v) - 1))][0];
     const dayRows = Array.from({ length: 7 }, (_, i) => {
       const d = addDays(from, i), ci = data.checkins[d] || {}, jt = ((data.journal[d] && data.journal[d].text) || '').trim();
@@ -1281,7 +1369,7 @@
   }
 
   function timerCard() {
-    const t = data.timer;
+    const t = data.timer, anim = ui.tAnim; ui.tAnim = null;
     if (t) {
       const label = t.topic || defaultLabel(t.type);
       return `
@@ -1292,9 +1380,19 @@
             ${prioPill(t.priority)}
             ${t.blockId ? '<span class="pill" style="background:#eff6ff;color:#1d4ed8">From timetable</span>' : ''}
           </div>
-          <div class="clock ${t.startedAt ? '' : 'paused'}" id="clock">00:00:00</div>
-          <div class="remain" id="remain"></div>
-          <div class="bar"><i id="tbar" style="width:0%"></i></div>
+          <div class="tstage ${t.startedAt ? 'run' : 'pz'} ${anim ? 'go-' + anim : ''}">
+            <div class="face main-f">
+              <div class="clock ${t.startedAt ? '' : 'paused'}" id="clock">00:00:00</div>
+              <div class="remain" id="remain"></div>
+              <div class="bar"><i id="tbar" style="width:0%"></i></div>
+            </div>
+            <div class="face pause-f" ${t.startedAt ? 'aria-hidden="true"' : ''}>
+              <div class="pause-panel ok" id="ppanel">
+                <svg class="pp-ring" viewBox="0 0 120 120"><circle class="pp-bg" cx="60" cy="60" r="54"/><circle class="pp-fg" id="pfg" cx="60" cy="60" r="54" stroke-dasharray="339.3" stroke-dashoffset="339.3"/></svg>
+                <div class="pp-in"><span class="pp-l">Paused for</span><b id="pclock">${pmm(t.startedAt ? (ui.lastPause || 0) : 0)}</b><span class="pp-s" id="pnote"></span></div>
+              </div>
+            </div>
+          </div>
           <div class="timer-actions">
             ${t.startedAt
               ? '<button class="btn big" data-action="pause">Pause</button>'
@@ -1304,6 +1402,10 @@
             <button class="btn big danger" data-action="discard">Discard</button>
           </div>
           <input type="text" data-bind="run-comment" placeholder="Add a comment (optional)" value="${esc(t.comment)}">
+          <div class="timer-extra">
+            <button class="linkbtn" data-action="switch-topic">⇄ Switch topic</button>
+            ${t.startedAt && !t.backed && elapsedMs(t) < 300000 ? '<span class="late"><span class="note">Started earlier?</span>' + [5, 10, 15].map((m) => `<button data-action="back-start" data-v="${m}">${m} min ago</button>`).join('') + '</span>' : ''}
+          </div>
         </div>`;
     }
 
@@ -1541,8 +1643,26 @@
           ${subjectCard(all)}
           <div class="card"><h2>By importance <small>study + other</small></h2>${prioBreakdown(all)}<div style="height:18px"></div><h2>Time split</h2>${splitBar(tot)}</div>
         </div>
+        ${pauseCard(r)}
         ${wr ? wr.highlights + wr.days : ''}
       </div>`;
+  }
+
+  function pauseCard(r) {
+    const ps = live(data.pauses).filter((p) => p.date >= r.from && p.date <= r.to);
+    const ss = live(data.sessions).filter((s) => s.date >= r.from && s.date <= r.to && kindOf(s.type) === 'study' && s.pausedSec !== undefined);
+    if (!ps.length && !ss.length) return '';
+    const net = ss.reduce((n, s) => n + s.seconds, 0), pz = ss.reduce((n, s) => n + (s.pausedSec || 0), 0), score = net + pz ? Math.round(net / (net + pz) * 100) : null;
+    const by = {}; ps.forEach((p) => { const k = p.reason || 'none'; (by[k] = by[k] || { sec: 0, n: 0 }); by[k].sec += p.seconds; by[k].n++; });
+    const rows = Object.entries(by).sort((x, y) => y[1].sec - x[1].sec), top = rows.length ? rows[0][1].sec : 1;
+    const label = (k) => { const f = PAUSE_REASONS.find((x) => x[0] === k); return f ? `${f[1]} ${f[2]}` : 'No reason given'; };
+    return `<div class="card pz-card"><h2>Pauses & focus <small>session time spent studying</small></h2>
+      <div class="pz-top"><div class="pz-score"><b>${score === null ? '–' : score + '%'}</b><span>focus score</span></div>
+        <div class="pz-n"><b>${ps.length}</b><span>${ps.length === 1 ? 'pause' : 'pauses'}</span></div>
+        <div class="pz-n"><b>${short(ps.reduce((n, p) => n + p.seconds, 0))}</b><span>paused in total</span></div>
+        <div class="pz-n"><b>${ps.length ? short(Math.round(ps.reduce((n, p) => n + p.seconds, 0) / ps.length)) : '–'}</b><span>average pause</span></div></div>
+      ${rows.length ? `<div class="pz-rows">${rows.map(([k, v], i) => `<div class="pz-row"><span class="pz-l">${label(k)}</span><div class="pz-bar"><i style="width:${Math.max(4, v.sec / top * 100)}%;animation-delay:${i * 70}ms"></i></div><span class="pz-v">${short(v.sec)} · ${v.n}×</span></div>`).join('')}</div>` : '<p class="note">No pauses of a minute or more in this period.</p>'}
+    </div>`;
   }
 
   function barChart(r, perDay, nDays, keys = ['study', 'break', 'neutral']) {
@@ -1686,6 +1806,8 @@
             <div class="field"><label>Start timetable blocks as</label>
               <select data-change="block-mode"><option value="stopwatch" ${data.settings.blockMode !== 'countdown' ? 'selected' : ''}>Stopwatch (counts up, never stops on its own)</option><option value="countdown" ${data.settings.blockMode === 'countdown' ? 'selected' : ''}>Countdown to the block's end</option></select></div>
             <div class="field"><label>Default length of a block added from your topics (minutes)</label><input type="number" min="5" max="480" step="5" data-change="block-min" value="${data.settings.blockMin || 60}"></div>
+            <div class="field"><label>Pause budget (minutes of pause per hour of session, 0 = off)</label><input type="number" min="0" max="60" step="1" data-change="pause-budget" value="${data.settings.pauseBudget === undefined ? 10 : data.settings.pauseBudget}"></div>
+            <div class="field"><label>Remind me when a pause lasts this long (minutes, 0 = off)</label><input type="number" min="0" max="240" step="5" data-change="long-pause" value="${data.settings.longPause === undefined ? 15 : data.settings.longPause}"></div>
             <div class="field"><label class="chk"><input type="checkbox" data-change="block-ting" ${data.settings.blockTing !== false ? 'checked' : ''}> Soft bell when a stopwatch block reaches its planned time</label></div>
             <div class="row">
               <button class="btn" data-action="export">Export backup</button>
@@ -3370,6 +3492,29 @@
     },
     // --- v4
     'toast-undo': () => { const f = toastUndo; toastUndo = null; $('#toast').hidden = true; if (f) f(); },
+    'pause-reason': (el) => {
+      const p = data.pauses.find((x) => x.id === el.dataset.id), v = el.dataset.v;
+      if (p && v) { p.reason = v; touch(p); persist(true); }
+      $$(`[data-action=pause-reason][data-id="${el.dataset.id}"]`).forEach((b) => b.classList.toggle('on', !!v && b.dataset.v === v));
+      if (el.closest('#pask')) { hidePask(); if (v) toast('Noted'); }
+    },
+    'back-start': (el) => {
+      const t = data.timer, m = +el.dataset.v; if (!t || !t.startedAt || t.backed || !m) return;
+      t.accumulatedMs += m * 60000; t.startWall -= m * 60000; t.backed = true; data.timerUpdatedAt = Date.now(); persist(true); render();
+      toast(`Counted ${m} minutes from before you pressed start`);
+    },
+    'switch-topic': () => {
+      const t = data.timer; if (!t) return;
+      const topics = live(data.topics).filter((x) => x.type === t.type);
+      openModal('Switch topic', `
+        <p class="note" style="margin-bottom:12px">Saves <b>${esc(t.topic || defaultLabel(t.type))}</b> (${short(Math.round(elapsedMs(t) / 1000))}) and starts the next one straight away, with no gap.</p>
+        <div class="field"><label>Next topic</label><input type="text" id="sw-topic" list="sw-list" autocomplete="off" placeholder="Type a topic or pick one"><datalist id="sw-list">${topics.map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>
+        <div class="field"><label>Importance</label><select id="sw-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>`, () => {
+        const topic = ($('#sw-topic').value || '').trim(); if (!topic) { toast('Type the next topic'); return false; }
+        const spec = { type: t.type, topic, priority: $('#sw-prio').value, mode: 'stopwatch', minutes: 0 }, prev = t.topic || defaultLabel(t.type), secs = Math.round(elapsedMs(t) / 1000);
+        stopTimer(true, { quiet: true }); startTimer(spec); toast(`Saved ${short(secs)} of ${prev}. Now on ${topic}`);
+      }, 'Switch');
+    },
     'set-focus': (el) => {
       const s = data.sessions.find((x) => x.id === el.dataset.id); closeModal();
       if (s) { s.focus = +el.dataset.v; touch(s); persist(true); render(); toast(`Focus ${s.focus}/5 saved`); }
@@ -3533,6 +3678,8 @@
     'imp-done': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.done = !!el.checked; touch(it); persist(true); render(); } },
     'block-mode': (el) => { data.settings.blockMode = el.value === 'countdown' ? 'countdown' : 'stopwatch'; touch(data.settings); persist(true); toast('Updated'); },
     'block-min': (el) => { data.settings.blockMin = Math.min(480, Math.max(5, parseInt(el.value, 10) || 60)); touch(data.settings); persist(true); toast('Updated'); },
+    'pause-budget': (el) => { data.settings.pauseBudget = Math.min(60, Math.max(0, parseInt(el.value, 10) || 0)); touch(data.settings); persist(true); toast('Updated'); },
+    'long-pause': (el) => { data.settings.longPause = Math.min(240, Math.max(0, parseInt(el.value, 10) || 0)); touch(data.settings); persist(true); toast('Updated'); },
     'block-ting': (el) => { data.settings.blockTing = !!el.checked; touch(data.settings); persist(true); },
     'ask-focus': (el) => { data.settings.askFocus = !!el.checked; touch(data.settings); persist(true); },
     sound: (el) => { data.settings.sound = !!el.checked; touch(data.settings); persist(true); if (el.checked) ting(); },
