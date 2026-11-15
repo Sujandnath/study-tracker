@@ -125,7 +125,7 @@
       categories: BUILTIN_CATS.map((b) => ({ ...b, updatedAt: 0 })),
       plans: {},
       templates: [],
-      settings: { dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, updatedAt: t },
+      settings: { dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, blockMin: 60, updatedAt: t },
       timer: null,
       timerUpdatedAt: 0
     };
@@ -154,7 +154,7 @@
     d.important.title = d.important.title || 'Main topics';
     d.important.titleAt = d.important.titleAt || 0;
     if (!Array.isArray(d.important.items)) d.important.items = [];
-    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, updatedAt: 0 }, d.settings || {});
+    d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, blockMin: 60, updatedAt: 0 }, d.settings || {});
     if (!d.timer) d.timer = null;
     return d;
   }
@@ -222,13 +222,121 @@
     donut: { mode: 'type', sel: null },
     imp: { text: false },
     lib: { org: false, sel: [] },
+    ib: { open: (() => { try { return localStorage.getItem('st-ib-open') !== '0'; } catch (e) { return true; } })() },
+    undoOpen: (() => { try { return localStorage.getItem('st-undo-open') === '1'; } catch (e) { return false; } })(),
     rw: { open: {}, goalsDone: false, mode: 'day', date: null, month: null, from: null, to: null, logAll: false, set: (() => { try { return localStorage.getItem('st-pt-set') === '1'; } catch (e) { return false; } })() },
     form: { type: 'study', topic: '', priority: 'medium', mode: 'stopwatch', minutes: 25 },
     prog: { mode: 'month', month: todayStr().slice(0, 7), anchor: todayStr(), from: addDays(todayStr(), -29), to: todayStr(), incOther: false, open: {} }
   };
 
   let saveTimer;
+  // =====================================================================
+  //  CHANGE HISTORY: the last changes you made, each one undoable.
+  //  Kept on this device only (not synced). Points settings, the lock, the
+  //  loan and the timer are deliberately not part of it.
+  // =====================================================================
+  const HIST_ARR = ['sessions', 'topics', 'subjects', 'presets', 'rewards', 'redemptions', 'categories', 'templates'];
+  const HIST_MAP = ['journal', 'checkins', 'plans', 'rest'];
+  const HIST_KEY = 'studytracker-history';
+  let hist = [], histSnapState = null, histSuppress = false;
+  try { hist = JSON.parse(localStorage.getItem(HIST_KEY) || '[]'); if (!Array.isArray(hist)) hist = []; } catch (e) { hist = []; }
+  const histSave = () => { try { localStorage.setItem(HIST_KEY, JSON.stringify(hist.slice(0, 30))); } catch (e) { /* storage unavailable */ } };
+  const histStrip = (j) => String(j).replace(/"updatedAt":\d+,?/g, '');
+  function histItems(k) { return k === 'important' ? data.important.items : data[k]; }
+  function histBuild() {
+    const s = { a: {}, m: {}, set: {}, setU: (data.settings && data.settings.updatedAt) || 0 };
+    HIST_ARR.concat('important').forEach((k) => { const mp = new Map(); histItems(k).forEach((r) => mp.set(r.id, { u: r.updatedAt || 0, d: !!r.deleted, j: JSON.stringify(r) })); s.a[k] = mp; });
+    HIST_MAP.forEach((k) => { const mp = new Map(); Object.keys(data[k] || {}).forEach((key) => { const r = data[k][key]; mp.set(key, { u: (r && r.updatedAt) || 0, j: JSON.stringify(r) }); }); s.m[k] = mp; });
+    Object.keys(data.settings || {}).forEach((k) => { if (k !== 'updatedAt') s.set[k] = JSON.stringify(data.settings[k]); });
+    return s;
+  }
+  function histRebase() { try { histSnapState = histBuild(); } catch (e) { histSnapState = null; } }
+  function histDiff() {
+    const s = histSnapState, out = [];
+    HIST_ARR.concat('important').forEach((k) => {
+      const old = s.a[k];
+      histItems(k).forEach((r) => {
+        const o = old.get(r.id), u = r.updatedAt || 0, d = !!r.deleted;
+        if (!o) { const j = JSON.stringify(r); old.set(r.id, { u, d, j }); if (!d) out.push({ coll: k, key: r.id, kind: 'add', before: null, after: j }); }
+        else if (o.u !== u || o.d !== d) {
+          const j = JSON.stringify(r); old.set(r.id, { u, d, j });
+          if (histStrip(j) !== histStrip(o.j)) out.push({ coll: k, key: r.id, kind: !o.d && d ? 'delete' : o.d && !d ? 'restore' : 'edit', before: o.j, after: j });
+        }
+      });
+    });
+    HIST_MAP.forEach((k) => {
+      const old = s.m[k];
+      Object.keys(data[k] || {}).forEach((key) => {
+        const r = data[k][key], o = old.get(key), u = (r && r.updatedAt) || 0;
+        if (!o || o.u !== u) { const j = JSON.stringify(r); old.set(key, { u, j }); if (!o || histStrip(o.j) !== histStrip(j)) out.push({ coll: k, key, kind: o ? 'edit' : 'add', before: o ? o.j : null, after: j }); }
+      });
+    });
+    if (((data.settings && data.settings.updatedAt) || 0) !== s.setU) {
+      s.setU = data.settings.updatedAt || 0;
+      Object.keys(data.settings).forEach((k) => { if (k === 'updatedAt') return; const j = JSON.stringify(data.settings[k]); if (s.set[k] !== j) { out.push({ coll: 'settings', key: k, kind: 'edit', before: s.set[k] === undefined ? null : s.set[k], after: j }); s.set[k] = j; } });
+    }
+    return out;
+  }
+  const HIST_NOUN = { sessions: 'entry', topics: 'topic', subjects: 'subject', presets: 'preset', rewards: 'reward', redemptions: 'redemption', categories: 'category', templates: 'template', important: 'important topic', plans: 'plan', journal: 'journal', checkins: 'check-in', rest: 'rest day', settings: 'setting' };
+  function histLabel(e) {
+    let r = {}; try { r = JSON.parse(e.after !== null && e.after !== undefined ? e.after : e.before) || {}; } catch (x) { r = {}; }
+    const verb = { add: 'Added', edit: 'Edited', delete: 'Deleted', restore: 'Restored' }[e.kind];
+    let what = '';
+    if (e.coll === 'sessions') what = `${r.topic || 'entry'} · ${short(r.seconds || 0)}`;
+    else if (e.coll === 'redemptions') return `Redeemed ${r.name} (−${r.cost})`.replace('Redeemed', e.kind === 'delete' ? 'Returned' : 'Redeemed');
+    else if (e.coll === 'important') what = r.text || '';
+    else if (['plans', 'journal', 'checkins', 'rest'].includes(e.coll)) what = fmtShort(e.key);
+    else if (e.coll === 'settings') what = `${e.key} ${e.before === null ? '' : JSON.parse(e.before) + ' → '}${JSON.parse(e.after)}`;
+    else what = r.name || '';
+    return `${verb} ${HIST_NOUN[e.coll]}: ${what}`.trim();
+  }
+  function histCapture() {
+    if (!data) return;
+    if (!histSnapState || histSuppress) { histSuppress = false; histRebase(); return; }
+    let ents; try { ents = histDiff(); } catch (e) { histRebase(); return; }
+    if (!ents.length) return;
+    const sessionTopics = new Set(ents.filter((e) => e.coll === 'sessions' && e.kind === 'add').map((e) => { try { return String(JSON.parse(e.after).topic || '').toLowerCase(); } catch (x) { return ''; } }));
+    const now = Date.now();
+    ents.forEach((e) => {
+      if (e.coll === 'topics' && e.kind === 'add') { try { if (sessionTopics.has(String(JSON.parse(e.after).name || '').toLowerCase())) return; } catch (x) { /* keep */ } }
+      const last = hist[0];
+      if (last && last.coll === e.coll && last.key === e.key && now - last.at < 120000 && e.kind === 'edit' && (last.kind === 'edit' || last.kind === 'add')) {
+        last.after = e.after; last.at = now; last.label = histLabel(last);
+        if (last.kind === 'edit' && last.before !== null && histStrip(last.before) === histStrip(last.after)) hist.shift();
+        return;
+      }
+      const item = { id: uid(), at: now, ...e }; item.label = histLabel(item); hist.unshift(item);
+    });
+    hist = hist.slice(0, 30); histSave();
+  }
+  function histUndo(id) {
+    const i = hist.findIndex((h) => h.id === id), h = hist[i]; if (!h) return;
+    if (h.coll === 'rewards' && h.kind === 'edit' && ptLocked()) { toast(lockMsg()); return; }
+    const before = h.before !== null && h.before !== undefined ? JSON.parse(h.before) : null, now = Date.now();
+    if (h.coll === 'settings') {
+      if (h.before === null) delete data.settings[h.key]; else data.settings[h.key] = before;
+      touch(data.settings);
+    } else if (HIST_MAP.includes(h.coll)) {
+      data[h.coll][h.key] = before ? { ...before, updatedAt: now } : h.coll === 'plans' ? { deleted: true, updatedAt: now } : h.coll === 'journal' ? { text: '', updatedAt: now } : h.coll === 'rest' ? { on: false, updatedAt: now } : { updatedAt: now };
+    } else {
+      const arr = histItems(h.coll), idx = arr.findIndex((r) => r.id === h.key);
+      if (h.kind === 'add') { if (idx >= 0) { arr[idx].deleted = true; touch(arr[idx]); } }
+      else { const obj = { ...before, updatedAt: now }; if (idx >= 0) arr[idx] = obj; else arr.push(obj); }
+    }
+    hist.splice(i, 1); histSave();
+    histSuppress = true; persist(true); render(); toast(`Undone: ${h.label}`);
+  }
+  const histAgo = (t) => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.floor(m / 60)} h ago` : fmtShort(ymd(new Date(t))); };
+  function undoCard() {
+    const open = ui.undoOpen, items = hist.slice(0, 10);
+    return `<div class="card"><h2>Undo <small>last 10 changes</small><button class="btn sm" data-action="undo-toggle">${open ? 'Hide' : 'Show'}</button></h2>
+      ${open ? (items.length ? items.map((h) => `<div class="list-row"><div class="grow"><div class="nm">${esc(h.label)}</div><div class="meta">${histAgo(h.at)}</div></div><button class="btn sm" data-action="hist-undo" data-id="${h.id}">Undo</button></div>`).join('')
+        : '<div class="note">Changes you make will appear here so you can undo them. Points settings, loans and timers are not included.</div>') : ''}
+    </div>`;
+  }
+
   function persist(immediate) {
+    histCapture();
     clearTimeout(saveTimer);
     if (immediate) store.save(data);
     else saveTimer = setTimeout(() => store.save(data), 300);
@@ -283,7 +391,7 @@
       if (!sync.gistId) sync.gistId = await findGist();
       const remote = sync.gistId ? await readGist(sync.gistId) : null;
       const before = syncPayload(data);
-      if (remote) data = mergeData(data, remote);
+      if (remote) { data = mergeData(data, remote); histRebase(); }
       const merged = syncPayload(data);
       const changedHere = merged !== before;
       const remoteText = remote ? syncPayload(normalize(JSON.parse(JSON.stringify(remote)))) : '';
@@ -1539,6 +1647,7 @@
       <div class="page-head"><div><h1>Topics &amp; Presets</h1><p class="sub">Save what you study and how you like to time it</p></div></div>
       <div class="grid">
         <div class="stack">
+          ${undoCard()}
           ${subjectsCard()}
           ${topicsCard()}
           ${categoriesCard()}
@@ -1568,6 +1677,7 @@
               <div><button class="btn sm" data-action="sound-test">Play sound</button></div></div>
             <div class="field"><label>Start timetable blocks as</label>
               <select data-change="block-mode"><option value="stopwatch" ${data.settings.blockMode !== 'countdown' ? 'selected' : ''}>Stopwatch (counts up, never stops on its own)</option><option value="countdown" ${data.settings.blockMode === 'countdown' ? 'selected' : ''}>Countdown to the block's end</option></select></div>
+            <div class="field"><label>Default length of a block added from your topics (minutes)</label><input type="number" min="5" max="480" step="5" data-change="block-min" value="${data.settings.blockMin || 60}"></div>
             <div class="field"><label class="chk"><input type="checkbox" data-change="block-ting" ${data.settings.blockTing !== false ? 'checked' : ''}> Soft bell when a stopwatch block reaches its planned time</label></div>
             <div class="row">
               <button class="btn" data-action="export">Export backup</button>
@@ -1798,7 +1908,6 @@
           </div>
         </div>
         <div class="stack">
-          ${importantCard()}
           <div class="card">
             <h2>Day summary</h2>
             <div class="tiles">
@@ -1812,6 +1921,7 @@
             </div>
             <p class="note" style="margin-top:10px">${nDone} of ${blocks.length} ${blocks.length === 1 ? 'block' : 'blocks'} done</p>
           </div>
+          ${importantCard()}
           <div class="card">
             <h2>Templates &amp; copy</h2>
             <div class="field"><label>Save this day's plan as a template</label>
@@ -1832,24 +1942,67 @@
 
   // ---- "Important topics" note, shown beside the timetable
   const impItems = () => live(data.important.items).sort((x, y) => (x.order || 0) - (y.order || 0));
+  const defaultBlockMin = () => Math.max(5, +(data.settings && data.settings.blockMin) || 60);
+  // first free slot of `dur` minutes on the day (minutes after the day start); prefers `pref` when that is free and not in the past
+  function freeSlot(date, dur, pref) {
+    const plan = resolvePlan(date), iv = plan.blocks.map((b) => [offMin(b.start), offMin(b.start) + blockDur(b)]).sort((x, y) => x[0] - y[0]);
+    const nowOff = date === activePlanDate() ? Math.max(0, Math.ceil((Date.now() - anchorMs(date)) / 60000 / 5) * 5) : 0;
+    const free = (s) => s >= nowOff && s + dur <= 1440 && iv.every(([x, y]) => s + dur <= x || s >= y);
+    if (pref !== undefined && free(pref)) return pref;
+    let s = nowOff;
+    for (const [x, y] of iv) { if (s + dur <= x) break; if (y > s) s = y; }
+    return s + dur <= 1440 ? s : null;
+  }
+  function addBlock(date, spec, quiet) {
+    const dur = Math.max(5, Math.round(spec.minutes || defaultBlockMin()));
+    const s = freeSlot(date, dur, spec.pref);
+    if (s === null) { if (!quiet) toast('No room left on this day'); return null; }
+    const blk = { id: uid(), start: fromMin(anchorMin() + s), end: fromMin(anchorMin() + s + dur), topic: spec.topic, type: spec.type || 'study', priority: spec.priority || 'medium', note: '' };
+    savePlan(date, (next) => { next.blocks.push(blk); });
+    if (!quiet) toast(`Added ${spec.topic}, ${blk.start}–${blk.end}`, () => savePlan(date, (next) => { next.blocks = next.blocks.filter((x) => x.id !== blk.id); }));
+    return blk;
+  }
+  function recentBlocks(date) {
+    const map = new Map(), onDay = resolvePlan(date).blocks;
+    Object.keys(data.plans).filter((k) => !data.plans[k].deleted).sort().forEach((k) => (data.plans[k].blocks || []).forEach((b) => {
+      if (!b.topic) return;
+      const key = `${b.type}|${b.topic.toLowerCase()}|${blockDur(b)}`, e = map.get(key) || { topic: b.topic, type: b.type, minutes: blockDur(b), count: 0 };
+      Object.assign(e, { priority: b.priority, start: b.start, last: k }); e.count++; map.set(key, e);
+    }));
+    return [...map.values()].filter((e) => !onDay.some((b) => (b.topic || '').toLowerCase() === e.topic.toLowerCase() && blockDur(b) === e.minutes))
+      .sort((x, y) => (y.last > x.last ? 1 : y.last < x.last ? -1 : y.count - x.count)).slice(0, 10);
+  }
   function importantCard() {
-    const items = impItems();
+    const items = impItems(), date = ttDate(), plan = resolvePlan(date), open = ui.ib.open;
+    const plannedOf = (t) => plan.blocks.find((b) => (b.topic || '').toLowerCase() === t.toLowerCase());
+    const studied = (t) => live(data.sessions).some((s) => s.date === date && kindOf(s.type) === 'study' && s.topic.toLowerCase() === t.toLowerCase());
+    const todo = items.filter((i) => !i.done && !plannedOf(i.text) && !studied(i.text));
+    const recent = recentBlocks(date);
+    const row = (i) => {
+      const pb = plannedOf(i.text), sd = studied(i.text), p = PRIOS[i.prio || 'medium'];
+      return `<li class="${i.done || sd ? 'done' : ''}">
+        <input type="checkbox" data-change="imp-done" data-id="${i.id}" ${i.done ? 'checked' : ''} aria-label="Covered">
+        <input class="imp-item" data-bind="imp-item" data-id="${i.id}" value="${esc(i.text)}" aria-label="Topic">
+        <button class="ib-prio" style="--c:${p.color};--bg:${p.bg}" data-action="ib-prio" data-id="${i.id}" title="Importance: ${p.label}. Tap to change">${p.label[0]}</button>
+        ${sd ? '<span class="ib-state ok">Studied</span>' : ''}
+        ${pb ? `<span class="ib-state">${pb.start}–${pb.end}</span>`
+          : `<span class="ib-add"><button class="btn sm primary" data-action="ib-add" data-id="${i.id}" title="Add to the timeline">+ Timeline</button><button class="btn sm" data-action="ib-more" data-id="${i.id}" aria-label="Choose length and time">▾</button></span>`}
+        <button class="imp-x" data-action="imp-del" data-id="${i.id}" aria-label="Remove topic">×</button>
+      </li>`;
+    };
     const body = ui.imp.text
       ? `<textarea id="imp-text" rows="10" placeholder="One topic per line">${esc(items.map((i) => i.text).join('\n'))}</textarea>
          <div class="imp-add"><button class="btn sm primary" data-action="imp-text-done">Save list</button><button class="btn sm" data-action="imp-text-cancel">Cancel</button></div>`
-      : `<ul class="imp-list">${items.map((i) => `
-           <li class="${i.done ? 'done' : ''}">
-             <input type="checkbox" data-change="imp-done" data-id="${i.id}" ${i.done ? 'checked' : ''} aria-label="Covered">
-             <input class="imp-item" data-bind="imp-item" data-id="${i.id}" value="${esc(i.text)}" aria-label="Topic">
-             <button class="imp-x" data-action="imp-del" data-id="${i.id}" aria-label="Remove topic">×</button>
-           </li>`).join('')}</ul>
-         ${items.length ? '' : '<p class="note imp-empty">Keep the topics you must not forget here: weak areas, formulas to revise, subjects to finish this week.</p>'}
+      : `${items.length ? `<div class="ib-bar"><button class="btn sm primary" data-action="ib-add-all" ${todo.length ? '' : 'disabled'}>Add ${todo.length || 'all'} to ${fmtShort(date)}</button><span class="note">one after another, in free slots</span></div>` : ''}
+         <ul class="imp-list">${items.map(row).join('')}</ul>
+         ${items.length ? '' : '<p class="note imp-empty">Keep the topics you must not forget here, then add each to the timeline with one tap.</p>'}
          <div class="imp-add"><input id="imp-new" type="text" placeholder="Add a topic…" autocomplete="off"><button class="btn sm primary" data-action="imp-add">Add</button></div>
+         ${recent.length ? `<div class="ib-recent"><div class="lbl">Recent blocks <span class="note">tap to add to this day</span></div><div class="ib-chips">${recent.map((e, k) => `<button class="ib-chip" data-action="ib-recent" data-i="${k}" title="${e.start} · ${PRIOS[e.priority || 'medium'].label}"><span class="dot" style="background:${cat(e.type).color}"></span>${esc(e.topic)} <small>${fmtDur(e.minutes)}</small></button>`).join('')}</div></div>` : ''}
          <div class="imp-foot"><button class="linkbtn" data-action="imp-text">Edit as text / paste a list</button>${items.some((i) => i.done) ? '<button class="linkbtn" data-action="imp-clear">Remove ticked</button>' : ''}</div>`;
     return `<div class="card imp">
       <div class="imp-bar"><span></span></div>
-      <input class="imp-title" data-bind="imp-title" value="${esc(data.important.title)}" aria-label="Note title">
-      ${body}
+      <div class="ib-head"><input class="imp-title" data-bind="imp-title" value="${esc(data.important.title)}" aria-label="Note title"><button class="btn sm" data-action="ib-toggle">${open ? 'Hide' : 'Show'}</button></div>
+      ${open ? body : `<p class="note ib-sum">${items.length} ${items.length === 1 ? 'topic' : 'topics'} · ${todo.length} to plan${recent.length ? ` · ${recent.length} recent blocks` : ''}</p>`}
     </div>`;
   }
 
@@ -2887,6 +3040,8 @@
     },
     'pt-set-toggle': () => { ui.rw.set = !ui.rw.set; try { localStorage.setItem('st-pt-set', ui.rw.set ? '1' : '0'); } catch (e) { /* ignore */ } render(); },
     'log-all': () => { ui.rw.logAll = !ui.rw.logAll; render(); },
+    'undo-toggle': () => { ui.undoOpen = !ui.undoOpen; try { localStorage.setItem('st-undo-open', ui.undoOpen ? '1' : '0'); } catch (e) { /* ignore */ } render(); },
+    'hist-undo': (el) => histUndo(el.dataset.id),
     'gl-toggle': () => { ui.rw.goalsDone = !ui.rw.goalsDone; render(); },
     'rw-mode': (el) => { ui.rw.mode = el.dataset.v; if (ui.rw.mode === 'custom') { const t = todayStr(); ui.rw.from = ui.rw.from || addDays(t, -29); ui.rw.to = ui.rw.to || t; } render(); },
     'rw-step': (el) => {
@@ -2923,6 +3078,31 @@
       ui.lib.sel.forEach((id) => { const t = data.topics.find((x) => x.id === id); if (t) { if (target) t.subjectId = target; else delete t.subjectId; touch(t); n++; } });
       ui.lib.sel = []; persist(true); render(); toast(`Moved ${n} ${n === 1 ? 'topic' : 'topics'}`);
     },
+    'ib-toggle': () => { ui.ib.open = !ui.ib.open; try { localStorage.setItem('st-ib-open', ui.ib.open ? '1' : '0'); } catch (e) { /* ignore */ } render(); },
+    'ib-prio': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { const order = ['high', 'medium', 'low'], k = order.indexOf(it.prio || 'medium'); it.prio = order[(k + 1) % 3]; touch(it); persist(true); render(); } },
+    'ib-add': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) addBlock(ttDate(), { topic: it.text, priority: it.prio || 'medium' }); },
+    'ib-more': (el) => {
+      const it = data.important.items.find((x) => x.id === el.dataset.id); if (!it) return;
+      openModal(`Add "${it.text}" to the timeline`, `
+        <div class="row"><div class="field grow"><label>Length (minutes)</label><input type="number" id="ib-min" min="5" max="480" step="5" value="${defaultBlockMin()}"></div>
+        <div class="field grow"><label>Start time (optional)</label><input type="time" id="ib-start"></div></div>
+        <p class="note">Leave the time empty to use the first free slot.</p>`, () => {
+        const m = parseInt($('#ib-min').value, 10); if (!(m >= 5)) { toast('Enter at least 5 minutes'); return false; }
+        const t = $('#ib-start').value;
+        addBlock(ttDate(), { topic: it.text, priority: it.prio || 'medium', minutes: m, pref: t ? offMin(t) : undefined });
+      }, 'Add');
+    },
+    'ib-add-all': () => {
+      const date = ttDate(), plan = resolvePlan(date), added = [];
+      impItems().forEach((i) => {
+        if (i.done || plan.blocks.some((b) => (b.topic || '').toLowerCase() === i.text.toLowerCase())) return;
+        if (live(data.sessions).some((s) => s.date === date && kindOf(s.type) === 'study' && s.topic.toLowerCase() === i.text.toLowerCase())) return;
+        const b = addBlock(date, { topic: i.text, priority: i.prio || 'medium' }, true); if (b) added.push(b.id);
+      });
+      if (!added.length) { toast('Nothing to add, or no room left'); return; }
+      toast(`Added ${added.length} ${added.length === 1 ? 'topic' : 'topics'} to the timeline`, () => savePlan(date, (next) => { next.blocks = next.blocks.filter((x) => !added.includes(x.id)); }));
+    },
+    'ib-recent': (el) => { const e = recentBlocks(ttDate())[+el.dataset.i]; if (e) addBlock(ttDate(), { topic: e.topic, type: e.type, priority: e.priority, minutes: e.minutes, pref: offMin(e.start) }); },
     // --- important topics
     'imp-add': () => {
       const el = $('#imp-new'), lines = String((el && el.value) || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -3031,7 +3211,7 @@
       if (!inc) return;
       if (inc.error || !Array.isArray(inc.sessions)) { toast(inc && inc.error ? inc.error : 'That file is not a valid backup.'); return; }
       const before = live(data.sessions).length;
-      data = mergeData(data, inc);
+      data = mergeData(data, inc); histRebase();
       persist(true); render();
       toast(`Merged. ${live(data.sessions).length - before} new entries added`);
     }
@@ -3116,6 +3296,7 @@
     'topic-subject': (el) => { const t = data.topics.find((x) => x.id === el.dataset.id); if (t) { if (el.value) t.subjectId = el.value; else delete t.subjectId; touch(t); persist(true); render(); } },
     'imp-done': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.done = !!el.checked; touch(it); persist(true); render(); } },
     'block-mode': (el) => { data.settings.blockMode = el.value === 'countdown' ? 'countdown' : 'stopwatch'; touch(data.settings); persist(true); toast('Updated'); },
+    'block-min': (el) => { data.settings.blockMin = Math.min(480, Math.max(5, parseInt(el.value, 10) || 60)); touch(data.settings); persist(true); toast('Updated'); },
     'block-ting': (el) => { data.settings.blockTing = !!el.checked; touch(data.settings); persist(true); },
     'ask-focus': (el) => { data.settings.askFocus = !!el.checked; touch(data.settings); persist(true); },
     sound: (el) => { data.settings.sound = !!el.checked; touch(data.settings); persist(true); if (el.checked) ting(); },
@@ -3145,6 +3326,7 @@
   // ---------- boot ----------
   (async function init() {
     data = normalize(await store.load());
+    histRebase();
     // the clock may have ticked past midnight while the app was closed
     render();
     try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* ignore */ }
@@ -3152,6 +3334,6 @@
     if (sync.token) runSync();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { get data() { return data; }, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
+    window.__st = { get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();
