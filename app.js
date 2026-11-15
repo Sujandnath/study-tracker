@@ -2537,6 +2537,14 @@
   const sgn = (n) => (n > 0 ? '+' + n : n < 0 ? '−' + Math.abs(n) : '0');
 
   const isMeditation = (s) => /medit|mindful|breathwork|breathing|pranayam|dhyan/i.test(cat(s.type).name + ' ' + s.topic);
+  // subjects a session counts toward for the weekly "every subject" goal: its topic, its activity name, or a subject of that same name (any non-sleep activity)
+  function weeklySubjectIds(s, tmap) {
+    if (kindOf(s.type) === 'sleep') return [];
+    const out = [], tp = (s.topic || '').toLowerCase(), cn = cat(s.type).name.toLowerCase();
+    [tp, cn].forEach((k) => { const t = tmap.get(k); if (t && t.subjectId) out.push(t.subjectId); });
+    live(data.subjects).forEach((x) => { const n = x.name.toLowerCase(); if (n === tp || n === cn) out.push(x.id); });
+    return out;
+  }
   const isWorkout = (s) => !isMeditation(s) && /workout|exercise|gym|yoga|fitness/i.test(cat(s.type).name + ' ' + s.topic);
   function computePoints() {
     const cfg = data.pointsCfg, v = ptv(), today = todayStr(), now = Date.now();
@@ -2681,8 +2689,7 @@
       if (finished && parseYmd(d).getDay() === 0 && subs.length) {
         const covered = new Set();
         for (let i = 0; i < 7; i++) (by[addDays(d, -i)] || []).forEach((s) => {
-          if (kindOf(s.type) !== 'study') return;
-          const t = tmap.get(s.topic.toLowerCase()); if (t && t.subjectId) covered.add(t.subjectId);
+          weeklySubjectIds(s, tmap).forEach((id) => covered.add(id));
         });
         if (subs.every((s) => covered.has(s.id))) add('Every subject studied this week', v.allSubjects, 'earn');
       }
@@ -3003,7 +3010,7 @@
     { const subs = live(data.subjects).filter((s) => live(data.topics).some((t) => t.subjectId === s.id));
       if (subs.length && v.allSubjects > 0) {
         const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t])), cov = new Set();
-        for (let d = weekStart(today); d <= today; d = addDays(d, 1)) live(data.sessions).filter((s) => s.date === d && kindOf(s.type) === 'study').forEach((s) => { const t = tmap.get(s.topic.toLowerCase()); if (t && t.subjectId) cov.add(t.subjectId); });
+        for (let d = weekStart(today); d <= today; d = addDays(d, 1)) live(data.sessions).filter((s) => s.date === d).forEach((s) => weeklySubjectIds(s, tmap).forEach((id) => cov.add(id)));
         const n = subs.filter((s) => cov.has(s.id)).length, miss = subs.filter((s) => !cov.has(s.id));
         const dl = (7 - ((parseYmd(today).getDay() + 6) % 7) - 1);
         push({ id: 'subjects', name: 'Every subject this week', pts: v.allSubjects, state: n === subs.length ? 'done' : 'open', pct: n / subs.length * 100,
