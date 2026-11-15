@@ -739,3 +739,12 @@ input[type=color] { width: 100%; height: 42px; padding: 3px; border: 1px solid v
   .st-start { height: 56px; } .startcard h2 { font-size: 20px; }
 }
 @media (prefers-reduced-motion: reduce) { .st-tile, .st-tile .ic, .st-step, .st-imp, .st-chips.swap .st-chip { animation: none !important; transition: none !important; } }
+
+.gl-dots { display: flex; gap: 5px; }
+.gl-dots i { width: 14px; height: 6px; border-radius: 3px; background: var(--blue-soft); }
+.gl-dots i.on { background: var(--blue); }
+.gl-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.gl-chips span { font-size: 11.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.gl-chips .ok { background: #dcfce7; color: #15803d; }
+.gl-chips .no { background: #fee2e2; color: #b91c1c; }
+.gl.done .gl-note { color: #15803d; }

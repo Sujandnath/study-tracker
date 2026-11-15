@@ -2934,15 +2934,19 @@
     const earnedLabels = new Set(((td && td.items) || []).map((i) => itemKey(i.label)));
     const goals = [];
     const push = (g) => goals.push(g);
+    const eod = new Date(); eod.setHours(24, 0, 0, 0);
+    const dayLeft = Math.max(0, Math.round((eod.getTime() - now) / 1000));
+    const more = (need, have) => { const l = Math.max(0, need - have); return l ? `${short(l)} more to go${l > dayLeft ? ' · not reachable before midnight' : ''}` : ''; };
+    const earnedFor = (re) => ((td && td.items) || []).filter((i) => re.test(i.label)).reduce((n, i) => n + i.pts, 0);
     // 1. plan the day
     if (v.plan > 0) {
-      if (earnedLabels.has('Planned early')) push({ id: 'plan', name: 'Plan your day', pts: v.plan, state: 'done' });
+      if (earnedLabels.has('Planned early')) push({ id: 'plan', name: 'Plan your day', pts: v.plan, state: 'done', dn: 'Planned in time' });
       else { const dl = planDeadline(today), left = Math.ceil((dl.limit - now) / 60000);
         if (left > 0) push({ id: 'plan', name: 'Plan your day', pts: v.plan, state: 'open', note: `Make a plan in the Timetable ${dl.text}${left < 180 ? ` · ${left} min left` : ''}`, urgent: true });
         else push({ id: 'plan', name: 'Plan your day', pts: v.plan, state: 'missed', note: `The window (${dl.text}) has passed` }); }
     }
     // 2. daily goal
-    if (v.goal > 0 && goalSec > 0) push({ id: 'goal', name: 'Daily study goal', pts: v.goal, state: st >= goalSec ? 'done' : 'open', pct: st / goalSec * 100, note: `${short(st)} of ${short(goalSec)}` });
+    if (v.goal > 0 && goalSec > 0) push({ id: 'goal', name: 'Daily study goal', pts: v.goal, state: st >= goalSec ? 'done' : 'open', pct: st / goalSec * 100, note: `${short(st)} of ${short(goalSec)} · ${more(goalSec, st)}`, dn: `${short(st)} studied` });
     // 3. study blocks
     { const plan = resolvePlan(today), blocks = plan.blocks.filter((b) => kindOf(b.type) === 'study' && !plan.skipped.includes(b.id));
       if (blocks.length && (v.blockH || v.blockM || v.blockL)) {
@@ -2953,62 +2957,68 @@
           const ok = dur > 0 && (act >= dur * 0.9 || (act > 0 && (plan.completed || []).includes(b.id)));
           if (ok) done++; else left += b.priority === 'high' ? v.blockH : b.priority === 'low' ? v.blockL : v.blockM;
         });
-        push({ id: 'blocks', name: 'Study blocks', pts: left, state: done === blocks.length ? 'done' : 'open', pct: done / blocks.length * 100, note: `${done} of ${blocks.length} done${left ? ` · +${left} still to earn` : ''}` });
+        push({ id: 'blocks', name: 'Study blocks', pts: done === blocks.length ? earnedFor(/study block/) : left, state: done === blocks.length ? 'done' : 'open', pct: done / blocks.length * 100, note: `${done} of ${blocks.length} study blocks done${left ? ` · +${left} still to earn` : ''}`, dn: `All ${blocks.length} blocks done${earnedFor(/study block/) ? ` · earned +${earnedFor(/study block/)}` : ''}` });
       } }
     // 4. stretch goal
-    if (v.stretch > 0 && goalSec > 0 && v.stretchMin * 60 > goalSec) push({ id: 'stretch', name: 'Stretch goal', pts: v.stretch, state: st >= v.stretchMin * 60 ? 'done' : 'open', pct: st / (v.stretchMin * 60) * 100, note: `${short(st)} of ${short(v.stretchMin * 60)}` });
+    if (v.stretch > 0 && goalSec > 0 && v.stretchMin * 60 > goalSec) push({ id: 'stretch', name: 'Stretch goal', pts: v.stretch, state: st >= v.stretchMin * 60 ? 'done' : 'open', pct: st / (v.stretchMin * 60) * 100, note: `${short(st)} of ${short(v.stretchMin * 60)} · ${more(v.stretchMin * 60, st)}`, dn: `${short(st)} studied` });
     // 5. workout
     if (v.workout30 > 0 && v.workoutMax > 0) {
       let w = sess.filter((s) => kindOf(s.type) !== 'study' && kindOf(s.type) !== 'sleep' && isWorkout(s)).reduce((n, s) => n + s.seconds, 0);
       if (tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isWorkout(tm)) w += tmEl;
       const cap = v.workoutMax * 1800;
-      push({ id: 'workout', name: 'Workout', pts: Math.round(cap / 60 * v.workout30 / 30), state: w >= cap ? 'done' : 'open', pct: w / cap * 100, note: `${short(w)} of ${short(cap)} counted` });
+      push({ id: 'workout', name: 'Workout', pts: Math.round(cap / 60 * v.workout30 / 30), state: w >= cap ? 'done' : 'open', pct: w / cap * 100, note: `${short(w)} of ${short(cap)} counted · ${more(cap, w)} · counts: workout, exercise, gym, yoga, fitness`, dn: `${short(w)} counted` });
     }
     // 5a. meditation
     if (v.meditate30 > 0 && v.meditateMax > 0) {
       let m = sess.filter((s) => kindOf(s.type) !== 'study' && kindOf(s.type) !== 'sleep' && isMeditation(s)).reduce((n, s) => n + s.seconds, 0);
       if (tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isMeditation(tm)) m += tmEl;
       const cap = v.meditateMax * 1800;
-      push({ id: 'meditate', name: 'Meditation', pts: Math.round(cap / 60 * v.meditate30 / 30), state: m >= cap ? 'done' : 'open', pct: m / cap * 100, note: `${short(m)} of ${short(cap)} counted · any activity named meditation, mindfulness or breathing` });
+      push({ id: 'meditate', name: 'Meditation', pts: Math.round(cap / 60 * v.meditate30 / 30), state: m >= cap ? 'done' : 'open', pct: m / cap * 100, note: `${short(m)} of ${short(cap)} counted · ${more(cap, m)} · counts: meditation, mindfulness, breathing`, dn: `${short(m)} counted` });
     }
     // 5b. early start and deep work
     { const sl = sess.filter((s) => kindOf(s.type) === 'sleep').sort((x, y) => y.seconds - x.seconds)[0];
       if (v.earlyStart > 0 && sl) {
         const wake = sl.start + sl.seconds * 1000, lim = wake + v.earlyWin * 60000, left = Math.ceil((lim - now) / 60000);
-        if (earnedLabels.has('Early start')) push({ id: 'early', name: 'Early start', pts: v.earlyStart, state: 'done' });
+        if (earnedLabels.has('Early start')) push({ id: 'early', name: 'Early start', pts: v.earlyStart, state: 'done', dn: `Started within ${v.earlyWin} min of waking` });
         else if (left > 0) push({ id: 'early', name: 'Early start', pts: v.earlyStart, state: 'open', note: `Start studying within ${v.earlyWin} min of waking · ${left} min left`, urgent: true });
-        else push({ id: 'early', name: 'Early start', pts: v.earlyStart, state: 'missed', note: 'The window has passed' });
+        else push({ id: 'early', name: 'Early start', pts: v.earlyStart, state: 'missed', note: `The window closed ${v.earlyWin} min after you woke at ${new Date(wake).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` });
       }
       if (v.deep > 0) {
         let best = Math.max(0, ...sess.filter((s) => kindOf(s.type) === 'study' && s.focus >= 4).map((s) => s.seconds));
-        if (earnedLabels.has('Deep work')) push({ id: 'deep', name: 'Deep work', pts: v.deep, state: 'done' });
-        else push({ id: 'deep', name: 'Deep work', pts: v.deep, state: 'open', pct: best / (v.deepMin * 60) * 100, note: `One session of ${short(v.deepMin * 60)}+ rated 4–5 (best so far ${short(best)})` });
+        if (earnedLabels.has('Deep work')) push({ id: 'deep', name: 'Deep work', pts: v.deep, state: 'done', dn: 'Deep session completed' });
+        else push({ id: 'deep', name: 'Deep work', pts: v.deep, state: 'open', pct: best / (v.deepMin * 60) * 100, note: `One session of ${short(v.deepMin * 60)}+ rated 4–5 · best so far ${short(best)}${best < v.deepMin * 60 ? ` (${short(v.deepMin * 60 - best)} more)` : ' · rate it 4–5 to count'}${v.deepMin * 60 > dayLeft ? ' · not reachable before midnight' : ''}` });
       } }
     // 6. focused sessions (a running count, never "done")
     if (v.focus > 0) { const n = sess.filter((s) => kindOf(s.type) === 'study' && s.focus >= 4 && s.seconds >= 1800).length;
-      push({ id: 'focus', name: 'Focused sessions', pts: v.focus, state: 'count', note: `${n} so far · +${v.focus} each (rated 4–5, 30+ min)` }); }
+      push({ id: 'focus', name: 'Focused sessions', pts: v.focus, state: 'count', note: `${n} so far (+${n * v.focus} earned) · each session rated 4–5 and 30+ min adds +${v.focus}` }); }
     // 7. daily ticks
     const ci = data.checkins[today];
     [['checkin', 'Evening check-in', v.checkin, !!(ci && (ci.mood || ci.focus)), 'Rate your mood and focus on the Today page'],
      ['journal', 'Journal entry', v.journal, !!(((data.journal[today] && data.journal[today].text) || '').trim()), 'Write a line in your journal'],
-     ['sleep', 'Sleep logged', v.sleep, sess.some((s) => kindOf(s.type) === 'sleep'), 'Log last night’s sleep']].forEach(([id, name, p, ok, note]) => { if (p > 0) push({ id, name, pts: p, state: ok ? 'done' : 'open', note }); });
+     ['sleep', 'Sleep logged', v.sleep, sess.some((s) => kindOf(s.type) === 'sleep'), 'Log last night’s sleep']].forEach(([id, name, p, ok, note]) => { if (p > 0) push({ id, name, pts: p, state: ok ? 'done' : 'open', note, dn: ok ? 'Done for today' : '' }); });
     // 8. streak milestone
     { const cur = streak(), next = [3, 7, 30].find((m) => m > cur);
-      if (next && v['streak' + next] > 0) push({ id: 'streak', name: `${next}-day streak`, pts: v['streak' + next], state: 'open', pct: cur / next * 100, note: `${cur} of ${next} days${cur + 1 === next ? ' · study today to get it' : ''}` }); }
+      if (next && v['streak' + next] > 0) push({ id: 'streak', name: `${next}-day streak`, pts: v['streak' + next], state: 'open', pct: cur / next * 100, note: `${cur} of ${next} days${cur + 1 === next ? ' · study today to get it' : ` · ${next - cur} more day${next - cur === 1 ? '' : 's'}`}`, dots: next <= 10 ? { on: cur, total: next } : null }); }
     // 9. every subject this week
     { const subs = live(data.subjects).filter((s) => live(data.topics).some((t) => t.subjectId === s.id));
       if (subs.length && v.allSubjects > 0) {
         const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t])), cov = new Set();
         for (let d = weekStart(today); d <= today; d = addDays(d, 1)) live(data.sessions).filter((s) => s.date === d && kindOf(s.type) === 'study').forEach((s) => { const t = tmap.get(s.topic.toLowerCase()); if (t && t.subjectId) cov.add(t.subjectId); });
-        const n = subs.filter((s) => cov.has(s.id)).length;
-        push({ id: 'subjects', name: 'Every subject this week', pts: v.allSubjects, state: n === subs.length ? 'done' : 'open', pct: n / subs.length * 100, note: `${n} of ${subs.length} subjects · paid on Sunday` });
+        const n = subs.filter((s) => cov.has(s.id)).length, miss = subs.filter((s) => !cov.has(s.id));
+        const dl = (7 - ((parseYmd(today).getDay() + 6) % 7) - 1);
+        push({ id: 'subjects', name: 'Every subject this week', pts: v.allSubjects, state: n === subs.length ? 'done' : 'open', pct: n / subs.length * 100,
+          note: `${n} of ${subs.length} subjects · ${miss.length ? `still to study: ${miss.map((x) => x.name).join(', ')} · ` : ''}paid on Sunday${dl === 0 ? ' (today!)' : ` (${dl} day${dl === 1 ? '' : 's'} left)`}`,
+          chips: subs.map((x) => ({ n: x.name, ok: cov.has(x.id) })), dn: `All ${subs.length} subjects studied this week` });
       } }
     const open = goals.filter((g) => g.state === 'open' || g.state === 'count'), done = goals.filter((g) => g.state === 'done'), missed = goals.filter((g) => g.state === 'missed');
     open.sort((x, y) => (y.urgent ? 1 : 0) - (x.urgent ? 1 : 0));
     const row = (g) => `<div class="gl ${g.state}${g.urgent ? ' urgent' : ''}">
         <div class="gl-top"><span class="gl-nm">${g.state === 'done' ? '<span class="gl-ck">✓</span>' : ''}${esc(g.name)}</span><span class="gl-pts">${g.state === 'count' ? '+' + g.pts + ' each' : g.pts ? '+' + g.pts : ''}</span></div>
         ${g.pct !== undefined && g.state !== 'done' ? `<div class="bar"><i style="width:${Math.min(100, Math.max(0, g.pct))}%"></i></div>` : ''}
-        ${g.note && g.state !== 'done' ? `<div class="gl-note">${esc(g.note)}</div>` : ''}</div>`;
+        ${g.dots && g.state !== 'done' ? `<div class="gl-dots">${Array.from({ length: g.dots.total }, (_, i) => `<i class="${i < g.dots.on ? 'on' : ''}"></i>`).join('')}</div>` : ''}
+        ${g.note && g.state !== 'done' ? `<div class="gl-note">${esc(g.note)}</div>` : ''}
+        ${g.chips && g.state !== 'done' ? `<div class="gl-chips">${g.chips.map((c) => `<span class="${c.ok ? 'ok' : 'no'}">${c.ok ? '✓' : '✗'} ${esc(c.n)}</span>`).join('')}</div>` : ''}
+        ${g.state === 'done' && g.dn ? `<div class="gl-note">${esc(g.dn)}</div>` : ''}</div>`;
     const waived = goalWaived(today) ? `<div class="pt-pending" style="margin:0 0 12px"><div class="note">${boughtPass(today) ? 'Goal pass active' : 'Rest day'}: today's goal is waived, so goal-gated rewards are unlocked.</div></div>` : '';
     const doneRows = done.concat(missed);
     return `
