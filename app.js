@@ -513,8 +513,9 @@
   }
   function pauseTimer() {
     const t = data.timer; if (!t || !t.startedAt) return;
-    t.accumulatedMs = elapsedMs(t); t.startedAt = null; t.pausedAt = Date.now(); t.pauseAlerted = false; t.overAlerted = false; data.timerUpdatedAt = Date.now();
-    ui.tAnim = 'pause'; persist(true); render();
+    const study = isStudyTimer(t);
+    t.accumulatedMs = elapsedMs(t); t.startedAt = null; t.pausedAt = study ? Date.now() : null; t.pauseAlerted = false; t.overAlerted = false; data.timerUpdatedAt = Date.now();
+    if (study) ui.tAnim = 'pause'; persist(true); render();
   }
   // closes the current pause; a pause of a minute or more becomes a pause record (separate from break time)
   function endPause(t) {
@@ -532,7 +533,7 @@
     ui.lastPause = t.pausedAt ? Math.round((Date.now() - t.pausedAt) / 1000) : 0;
     const rec = endPause(t);
     t.startedAt = Date.now(); data.timerUpdatedAt = Date.now();
-    ui.tAnim = 'run'; persist(true); render();
+    if (isStudyTimer(t)) ui.tAnim = 'run'; persist(true); render();
     if (rec) askPauseReason(rec.id);
   }
   let paskT = null;
@@ -1341,7 +1342,7 @@
       ${installBanner()}
       <div class="grid">
         <div class="stack">
-          <div class="card ${data.timer && data.timer.startedAt ? 'timer-live' : ''}">${timerCard()}</div>
+          <div class="card ${focusLocked() ? 'timer-live' : ''}">${timerCard()}</div>
           ${upNextCard()}
           ${dayTimelineCard(d)}
         </div>
@@ -1380,18 +1381,18 @@
             ${prioPill(t.priority)}
             ${t.blockId ? '<span class="pill" style="background:#eff6ff;color:#1d4ed8">From timetable</span>' : ''}
           </div>
-          <div class="tstage ${t.startedAt ? 'run' : 'pz'} ${anim ? 'go-' + anim : ''}">
+          <div class="tstage ${t.startedAt || !isStudyTimer(t) ? 'run' : 'pz'} ${anim ? 'go-' + anim : ''}">
             <div class="face main-f">
               <div class="clock ${t.startedAt ? '' : 'paused'}" id="clock">00:00:00</div>
               <div class="remain" id="remain"></div>
               <div class="bar"><i id="tbar" style="width:0%"></i></div>
             </div>
-            <div class="face pause-f" ${t.startedAt ? 'aria-hidden="true"' : ''}>
+            ${!isStudyTimer(t) ? '' : `<div class="face pause-f" ${t.startedAt ? 'aria-hidden="true"' : ''}>
               <div class="pause-panel ok" id="ppanel">
                 <svg class="pp-ring" viewBox="0 0 120 120"><circle class="pp-bg" cx="60" cy="60" r="54"/><circle class="pp-fg" id="pfg" cx="60" cy="60" r="54" stroke-dasharray="339.3" stroke-dashoffset="339.3"/></svg>
                 <div class="pp-in"><span class="pp-l">Paused for</span><b id="pclock">${pmm(t.startedAt ? (ui.lastPause || 0) : 0)}</b><span class="pp-s" id="pnote"></span></div>
               </div>
-            </div>
+            </div>`}
           </div>
           <div class="timer-actions">
             ${t.startedAt
@@ -1808,6 +1809,7 @@
             <div class="field"><label>Default length of a block added from your topics (minutes)</label><input type="number" min="5" max="480" step="5" data-change="block-min" value="${data.settings.blockMin || 60}"></div>
             <div class="field"><label>Pause budget (minutes of pause per hour of session, 0 = off)</label><input type="number" min="0" max="60" step="1" data-change="pause-budget" value="${data.settings.pauseBudget === undefined ? 10 : data.settings.pauseBudget}"></div>
             <div class="field"><label>Remind me when a pause lasts this long (minutes, 0 = off)</label><input type="number" min="0" max="240" step="5" data-change="long-pause" value="${data.settings.longPause === undefined ? 15 : data.settings.longPause}"></div>
+            <div class="field"><label class="chk"><input type="checkbox" data-change="lock-other" ${data.settings.lockOther ? 'checked' : ''}> Also lock the app while a workout or other non-study timer runs (study always locks; breaks and sleep never do)</label></div>
             <div class="field"><label class="chk"><input type="checkbox" data-change="block-ting" ${data.settings.blockTing !== false ? 'checked' : ''}> Soft bell when a stopwatch block reaches its planned time</label></div>
             <div class="row">
               <button class="btn" data-action="export">Export backup</button>
@@ -2464,9 +2466,9 @@
   //  timetable, check-ins, journal, sleep). Only rewards, redeemed items and
   //  the point settings are stored.
   // =====================================================================
-  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
+  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
   const PT_LABELS = [
-    ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
+    ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['meditate30', 'Meditation, per 30 minutes (paid per minute)'], ['meditateMax', 'Meditation: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
     ['blockH', 'Study block done: high'], ['blockM', 'Study block done: medium'], ['blockL', 'Study block done: low'],
     ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
@@ -2492,7 +2494,8 @@
   function ptLog(text) { const at = Date.now(); data.pointsLog.push({ id: uid(), at, text, updatedAt: at }); }
   const sgn = (n) => (n > 0 ? '+' + n : n < 0 ? '−' + Math.abs(n) : '0');
 
-  const isWorkout = (s) => /workout|exercise|gym|yoga|fitness/i.test(cat(s.type).name + ' ' + s.topic);
+  const isMeditation = (s) => /medit|mindful|breathwork|breathing|pranayam|dhyan/i.test(cat(s.type).name + ' ' + s.topic);
+  const isWorkout = (s) => !isMeditation(s) && /workout|exercise|gym|yoga|fitness/i.test(cat(s.type).name + ' ' + s.topic);
   function computePoints() {
     const cfg = data.pointsCfg, v = ptv(), today = todayStr(), now = Date.now();
     const start = cfg.startDate || today, goal = data.settings.dailyGoalMin * 60;
@@ -2559,6 +2562,10 @@
       if (isToday && tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isWorkout(tm)) wsec += tmElapsed;
       const wmin = Math.min(wsec / 60, v.workoutMax * 30), wpts = Math.round(wmin * v.workout30 / 30);
       if (wpts) add(`Workout ${short(wsec)}`, wpts, 'earn');
+      { let msec = list.filter((s) => kindOf(s.type) !== 'study' && kindOf(s.type) !== 'sleep' && isMeditation(s)).reduce((n, s) => n + s.seconds, 0);
+        if (isToday && tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isMeditation(tm)) msec += tmElapsed;
+        const mpts = Math.round(Math.min(msec / 60, v.meditateMax * 30) * v.meditate30 / 30);
+        if (mpts) add(`Meditation ${short(msec)}`, mpts, 'earn'); }
       // timetable blocks
       const plan = resolvePlan(d);
       let doneH = 0, doneM = 0, doneL = 0, missed = 0, nb = 0;
@@ -2799,7 +2806,7 @@
   const itemRows = (items) => items.map((i) => `<div class="pt-row ${i.kind}"><span>${esc(i.label)}</span><b>${sgn(i.pts)}</b></div>`).join('');
 
   // ---- earnings & spending for a chosen period (Day / Week / Month / Custom)
-  const itemKey = (l) => /^Study \d|^Study$/.test(l) ? 'Study time' : /^Workout/.test(l) ? 'Workout' : /^Daily goal/.test(l) ? 'Daily goal' : /^Stretch/.test(l) ? 'Stretch goal'
+  const itemKey = (l) => /^Study \d|^Study$/.test(l) ? 'Study time' : /^Workout/.test(l) ? 'Workout' : /^Meditation/.test(l) ? 'Meditation' : /^Daily goal/.test(l) ? 'Daily goal' : /^Stretch/.test(l) ? 'Stretch goal'
     : /study blocks? done/.test(l) ? 'Study blocks done' : /focused/.test(l) ? 'Focused sessions' : /^Evening check-in/.test(l) ? 'Evening check-in' : /^Journal/.test(l) ? 'Journal' : /^Sleep/.test(l) ? 'Sleep logged'
     : /-day streak/.test(l) ? 'Streak bonuses' : /^Every subject/.test(l) ? 'All subjects studied' : /^Planned the day/.test(l) ? 'Planned early' : /^Missed daily goal/.test(l) ? 'Missed daily goal'
     : /missed blocks?/.test(l) ? 'Missed study blocks' : /penalty cap/.test(l) ? 'Daily penalty cap' : l;
@@ -2914,6 +2921,13 @@
       if (tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isWorkout(tm)) w += tmEl;
       const cap = v.workoutMax * 1800;
       push({ id: 'workout', name: 'Workout', pts: Math.round(cap / 60 * v.workout30 / 30), state: w >= cap ? 'done' : 'open', pct: w / cap * 100, note: `${short(w)} of ${short(cap)} counted` });
+    }
+    // 5a. meditation
+    if (v.meditate30 > 0 && v.meditateMax > 0) {
+      let m = sess.filter((s) => kindOf(s.type) !== 'study' && kindOf(s.type) !== 'sleep' && isMeditation(s)).reduce((n, s) => n + s.seconds, 0);
+      if (tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isMeditation(tm)) m += tmEl;
+      const cap = v.meditateMax * 1800;
+      push({ id: 'meditate', name: 'Meditation', pts: Math.round(cap / 60 * v.meditate30 / 30), state: m >= cap ? 'done' : 'open', pct: m / cap * 100, note: `${short(m)} of ${short(cap)} counted · any activity named meditation, mindfulness or breathing` });
     }
     // 5b. early start and deep work
     { const sl = sess.filter((s) => kindOf(s.type) === 'sleep').sort((x, y) => y.seconds - x.seconds)[0];
@@ -3094,7 +3108,9 @@
   //  RENDER + EVENTS
   // =====================================================================
   // While a timer or stopwatch is running, everything except the timer card is blurred and cannot be used. Pausing unlocks it.
-  const focusLocked = () => !!(data && data.timer && data.timer.startedAt);
+  const isStudyTimer = (t) => !!t && kindOf(t.type) === 'study';
+  const lockKind = (t) => { const k = kindOf(t.type); return k === 'study' || (k !== 'break' && k !== 'sleep' && !!data.settings.lockOther); };
+  const focusLocked = () => !!(data && data.timer && data.timer.startedAt && lockKind(data.timer));
   let lockApplied = false;
   function applyFocusLock() {
     const main = $('#main'), side = $('.side'), on = focusLocked();
@@ -3680,6 +3696,7 @@
     'block-min': (el) => { data.settings.blockMin = Math.min(480, Math.max(5, parseInt(el.value, 10) || 60)); touch(data.settings); persist(true); toast('Updated'); },
     'pause-budget': (el) => { data.settings.pauseBudget = Math.min(60, Math.max(0, parseInt(el.value, 10) || 0)); touch(data.settings); persist(true); toast('Updated'); },
     'long-pause': (el) => { data.settings.longPause = Math.min(240, Math.max(0, parseInt(el.value, 10) || 0)); touch(data.settings); persist(true); toast('Updated'); },
+    'lock-other': (el) => { data.settings.lockOther = !!el.checked; touch(data.settings); persist(true); render(); },
     'block-ting': (el) => { data.settings.blockTing = !!el.checked; touch(data.settings); persist(true); },
     'ask-focus': (el) => { data.settings.askFocus = !!el.checked; touch(data.settings); persist(true); },
     sound: (el) => { data.settings.sound = !!el.checked; touch(data.settings); persist(true); if (el.checked) ting(); },
