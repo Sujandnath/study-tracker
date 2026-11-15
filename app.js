@@ -156,6 +156,10 @@
     d.important.titleAt = d.important.titleAt || 0;
     if (!Array.isArray(d.important.items)) d.important.items = [];
     d.settings = Object.assign({ dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, blockMin: 60, pauseBudget: 10, longPause: 15, updatedAt: 0 }, d.settings || {});
+    if (!d.settings.medSeeded) {
+      if (!d.categories.some((x) => x.id === 'meditation' || (!x.deleted && /medit/i.test(x.name || '')))) d.categories.push({ id: 'meditation', name: 'Meditation', color: '#8b5cf6', kind: 'neutral', updatedAt: 0 });
+      d.settings.medSeeded = true;
+    }
     if (!d.timer) d.timer = null;
     return d;
   }
@@ -1410,49 +1414,87 @@
         </div>`;
     }
 
-    const f = ui.form, fk = kindOf(f.type);
-    const topics = live(data.topics).filter((x) => x.type === f.type);
-    const presets = live(data.presets);
+    return startCardHtml();
+  }
+
+  // ---------- the Start a timer card ----------
+  const ST_ICONS = {
+    study: '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H19v14H5.5A1.5 1.5 0 0 0 4 19.5v-14zM4 19.5A1.5 1.5 0 0 0 5.5 21H19v-3M8.5 8h6"/>',
+    break: '<path d="M5 9h11v5a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V9zM16 10h1.5a2 2 0 0 1 0 4H16M8 3v2M11 3v2"/>',
+    sleep: '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>',
+    meals: '<path d="M7 3v8M5 3v5a2 2 0 0 0 4 0V3M7 11v10M17 3c-2 2-2.5 5-2.5 8h2.5v10"/>',
+    plan: '<rect x="5" y="4" width="14" height="17" rx="2.5"/><path d="M9 4V3h6v1M9 11h6M9 15h4"/>',
+    shower: '<path d="M12 3.5c3 3.6 5 6.1 5 8.5a5 5 0 0 1-10 0c0-2.4 2-4.9 5-8.5z"/>',
+    workout: '<path d="M6.5 7v10M17.5 7v10M3.5 9.5v5M20.5 9.5v5M6.5 12h11"/>',
+    lotus: '<path d="M12 5c2 2.2 3 4.3 3 6.5S14 15 12 16c-2-1-3-2.3-3-4.5S10 7.2 12 5zM4 10c2.5 0 4.5 1 5.5 3M20 10c-2.5 0-4.5 1-5.5 3M6 17c2 1.5 4 2 6 2s4-.5 6-2"/>',
+    other: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+    play: '<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/>',
+    search: '<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>'
+  };
+  const stIcon = (k, s = 20) => `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ST_ICONS[k] || ST_ICONS.other}</svg>`;
+  function catIconKey(c) {
+    if (c.kind === 'study') return 'study'; if (c.kind === 'break') return 'break'; if (c.kind === 'sleep') return 'sleep';
+    const n = (c.name || '').toLowerCase();
+    return /medit|mindful|breath/.test(n) ? 'lotus' : /meal|food|lunch|dinner|breakfast|eat/.test(n) ? 'meals' : /plan/.test(n) ? 'plan' : /shower|bath/.test(n) ? 'shower' : /workout|gym|exercise|fitness|yoga|run/.test(n) ? 'workout' : 'other';
+  }
+  const startLabel = () => {
+    const f = ui.form, c = cat(f.type), k = c.kind;
+    const verb = k === 'study' ? 'Start studying' : k === 'break' ? 'Start break' : k === 'sleep' ? 'Start sleep' : `Start ${(c.name || 'timer').toLowerCase()}`;
+    return verb + (f.mode === 'countdown' && f.minutes > 0 ? ` · ${f.minutes} min` : '');
+  };
+  const stTitle = (k) => (k === 'break' ? ['Taking a break?', 'Add a label if you like, then start the clock'] : k === 'sleep' ? ['Time to rest?', 'Start the clock when you lie down, or log sleep you already had'] : ['What are you working on?', 'Type a topic, or tap a recent one']);
+  const stPlaceholder = (k) => (k === 'break' ? 'e.g. Tea, walk, lunch' : k === 'sleep' ? 'e.g. Night sleep, nap' : 'Type a topic or pick a saved one');
+  function recentTopics(type) {
+    const seen = new Set(), out = [];
+    live(data.sessions).filter((s) => s.type === type && (s.topic || '').trim()).sort((x, y) => y.start - x.start).forEach((s) => {
+      const k = s.topic.toLowerCase(); if (!seen.has(k) && out.length < 5) { seen.add(k); out.push(s.topic); }
+    });
+    return out;
+  }
+  const stChips = (type) => recentTopics(type).map((t) => `<button class="st-chip" data-action="use-topic" data-v="${esc(t)}"><i style="background:${cat(type).color}"></i>${esc(t)}</button>`).join('');
+  function startCardHtml() {
+    const f = ui.form, fk = kindOf(f.type), topics = live(data.topics).filter((x) => x.type === f.type), presets = live(data.presets), [h, sub] = stTitle(fk);
     return `
-      <h2>Start a timer</h2>
-      <div class="field">
-        <label>Activity</label>
-        <div class="seg">
-          ${cats().map((x) => `<button class="${f.type === x.id ? 'on' : ''}" data-action="set-type" data-v="${esc(x.id)}"><span class="dot" style="background:${x.color}"></span>${esc(x.name)}</button>`).join('')}
-        </div>
-      </div>
-      <div class="field">
-        <label>${fk === 'break' || fk === 'sleep' ? 'Label (optional)' : 'Topic'}</label>
-        <input type="text" id="f-topic" list="topic-list" data-bind="f-topic" data-change="f-topic-change" autocomplete="off"
-          placeholder="${fk === 'break' ? 'e.g. Tea, walk, lunch' : fk === 'sleep' ? 'e.g. Night sleep, nap' : 'Type a topic or pick a saved one'}" value="${esc(f.topic)}">
+      <div id="startcard" class="startcard ${fk === 'break' || fk === 'sleep' ? 'no-imp' : ''} ${f.mode === 'countdown' ? 'cd' : ''}">
+        <div class="st-glow"></div>
+        <h2 id="st-title">${h}</h2><div class="note" id="st-sub">${sub}</div>
+        <div class="st-bar"><span class="st-s">${stIcon('search', 22)}</span>
+          <input type="text" id="f-topic" list="topic-list" data-bind="f-topic" data-change="f-topic-change" autocomplete="off" placeholder="${stPlaceholder(fk)}" value="${esc(f.topic)}">
+          <kbd>↵ Start</kbd></div>
         <datalist id="topic-list">${topics.map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist>
-      </div>
-      <div class="field">
-        <label>Importance</label>
-        <div class="seg">
-          ${Object.entries(PRIOS).map(([k, v]) => `<button class="${f.priority === k ? 'on' : ''}" data-action="set-prio" data-v="${k}"><span class="dot" style="background:${v.color}"></span>${v.label}</button>`).join('')}
+        <div class="st-chips" id="st-recent">${stChips(f.type)}</div>
+        <div class="st-lbl">Activity</div>
+        <div class="st-tiles">${cats().map((x) => `<button class="st-tile ${f.type === x.id ? 'on' : ''}" data-action="set-type" data-v="${esc(x.id)}" style="--c:${x.color}"><span class="ic">${stIcon(catIconKey(x))}</span><span class="nm">${esc(x.name)}</span></button>`).join('')}</div>
+        <div class="st-row">
+          <div><div class="st-lbl">Timer</div>
+            <div class="st-modes"><div class="seg">
+              <button class="${f.mode === 'stopwatch' ? 'on' : ''}" data-action="set-mode" data-v="stopwatch">Stopwatch</button>
+              <button class="${f.mode === 'countdown' ? 'on' : ''}" data-action="set-mode" data-v="countdown">Countdown</button></div>
+              <span class="st-step"><button data-action="f-min-step" data-v="-5" aria-label="5 minutes less">−</button><input type="number" min="1" max="600" data-bind="f-minutes" value="${f.minutes}" aria-label="Minutes"><span>min</span><button data-action="f-min-step" data-v="5" aria-label="5 minutes more">+</button></span></div></div>
+          <div class="st-imp"><div class="st-lbl">Importance</div>
+            <div class="st-prios">${Object.entries(PRIOS).map(([k, v]) => `<button class="${f.priority === k ? 'on' : ''}" data-action="set-prio" data-v="${k}" style="--c:${v.color};--bg:${v.bg}"><i></i>${v.label}</button>`).join('')}</div></div>
         </div>
-      </div>
-      <div class="field">
-        <label>Timer</label>
-        <div class="row">
-          <div class="seg">
-            <button class="${f.mode === 'stopwatch' ? 'on' : ''}" data-action="set-mode" data-v="stopwatch">Stopwatch</button>
-            <button class="${f.mode === 'countdown' ? 'on' : ''}" data-action="set-mode" data-v="countdown">Countdown</button>
-          </div>
-          ${f.mode === 'countdown' ? `<div class="row tight"><input type="number" min="1" max="600" style="width:84px" data-bind="f-minutes" value="${f.minutes}"><span class="note">minutes</span></div>` : ''}
-        </div>
-      </div>
-      ${presets.length ? `
-      <div class="field">
-        <label>Presets</label>
-        <div class="chips">${presets.map((p) => `<button class="chip" data-action="use-preset" data-id="${p.id}">${esc(p.name)}</button>`).join('')}</div>
-      </div>` : ''}
-      <button class="btn primary big" data-action="start">Start</button>
-      <div class="row tight" style="margin-top:14px">
-        <button class="btn" data-action="go-sleep">Going to sleep</button>
-        <button class="btn" data-action="sleep-log">Log sleep</button>
+        ${presets.length ? `<div class="st-lbl">Presets</div><div class="st-pre">${presets.map((p) => `<button class="st-pr" data-action="use-preset" data-id="${p.id}">${esc(p.name)}</button>`).join('')}</div>` : ''}
+        <div class="st-go"><button class="st-start" data-action="start">${stIcon('play', 20)}<span id="st-start-t">${esc(startLabel())}</span></button>
+          <button class="st-ghost" data-action="go-sleep">${stIcon('sleep', 18)}Going to sleep</button></div>
+        <div class="st-foot"><button class="linkbtn" data-action="sleep-log">Log sleep</button></div>
       </div>`;
+  }
+  // update the start card in place so the changes animate instead of the card being redrawn
+  function syncStartCard() {
+    const root = $('#startcard'); if (!root) { render(); return; }
+    const f = ui.form, fk = kindOf(f.type), [h, sub] = stTitle(fk);
+    $$('.st-tile', root).forEach((b) => b.classList.toggle('on', b.dataset.v === f.type));
+    $$('.st-prios button', root).forEach((b) => b.classList.toggle('on', b.dataset.v === f.priority));
+    $$('.st-modes .seg button', root).forEach((b) => b.classList.toggle('on', b.dataset.v === f.mode));
+    root.classList.toggle('no-imp', fk === 'break' || fk === 'sleep');
+    root.classList.toggle('cd', f.mode === 'countdown');
+    $('#st-title', root).textContent = h; $('#st-sub', root).textContent = sub;
+    const inp = $('#f-topic', root); inp.placeholder = stPlaceholder(fk); if (inp.value !== f.topic) inp.value = f.topic;
+    const mi = $('[data-bind=f-minutes]', root); if (mi && +mi.value !== f.minutes) mi.value = f.minutes;
+    $('#st-start-t', root).textContent = startLabel();
+    const rc = $('#st-recent', root); rc.classList.remove('swap'); void rc.offsetWidth; rc.innerHTML = stChips(f.type); rc.classList.add('swap');
+    $('#topic-list', root).innerHTML = live(data.topics).filter((x) => x.type === f.type).map((x) => `<option value="${esc(x.name)}"></option>`).join('');
   }
 
   function logTable(list, ds) {
@@ -3166,11 +3208,18 @@
     'set-type': (el) => {
       ui.form.type = el.dataset.v;
       if (kindOf(ui.form.type) === 'break' || kindOf(ui.form.type) === 'sleep') { ui.form.priority = 'low'; }
-      render();
+      syncStartCard();
     },
-    'set-prio': (el) => { ui.form.priority = el.dataset.v; render(); },
-    'set-mode': (el) => { ui.form.mode = el.dataset.v; render(); },
-    'use-preset': (el) => { const p = live(data.presets).find((x) => x.id === el.dataset.id); if (p) { applyPreset(p); render(); toast(`Preset loaded: ${p.name}`); } },
+    'set-prio': (el) => { ui.form.priority = el.dataset.v; syncStartCard(); },
+    'set-mode': (el) => { ui.form.mode = el.dataset.v; if (ui.form.mode === 'countdown' && !(ui.form.minutes > 0)) ui.form.minutes = 25; syncStartCard(); },
+    'f-min-step': (el) => { ui.form.minutes = Math.min(600, Math.max(1, (parseInt(ui.form.minutes, 10) || 25) + (+el.dataset.v))); syncStartCard(); },
+    'use-topic': (el) => {
+      ui.form.topic = el.dataset.v;
+      const hit = live(data.topics).find((x) => x.name.toLowerCase() === ui.form.topic.toLowerCase());
+      if (hit && hit.priority && kindOf(ui.form.type) !== 'break' && kindOf(ui.form.type) !== 'sleep') ui.form.priority = hit.priority;
+      syncStartCard(); const i = $('#f-topic'); if (i) i.focus();
+    },
+    'use-preset': (el) => { const p = live(data.presets).find((x) => x.id === el.dataset.id); if (p) { applyPreset(p); syncStartCard(); toast(`Preset loaded: ${p.name}`); } },
     start: () => {
       const f = ui.form;
       if (f.mode === 'countdown' && !(f.minutes > 0)) { toast('Enter the countdown minutes'); return; }
@@ -3637,7 +3686,7 @@
       if (list) list.innerHTML = v.html;
       if (cnt) cnt.textContent = v.count;
     },
-    'f-minutes': (el) => { ui.form.minutes = parseInt(el.value, 10) || 0; },
+    'f-minutes': (el) => { ui.form.minutes = parseInt(el.value, 10) || 0; const s = $('#st-start-t'); if (s) s.textContent = startLabel(); },
     'imp-title': (el) => { data.important.title = el.value; data.important.titleAt = Date.now(); persist(); },
     'imp-item': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.text = el.value; touch(it); persist(); } },
     'run-comment': (el) => { if (data.timer) { data.timer.comment = el.value; data.timerUpdatedAt = Date.now(); persist(); } },
@@ -3653,7 +3702,7 @@
     'date-pick': (el) => { if (el.value) { ui.date = el.value; render(); } },
     'f-topic-change': (el) => {
       const hit = live(data.topics).find((x) => x.name.toLowerCase() === el.value.trim().toLowerCase());
-      if (hit) { ui.form.priority = hit.priority; render(); }
+      if (hit && kindOf(ui.form.type) !== 'break' && kindOf(ui.form.type) !== 'sleep') { ui.form.priority = hit.priority; syncStartCard(); }
     },
     'gap-cap': (el) => { data.settings.gapCapMin = Math.min(720, Math.max(10, parseInt(el.value, 10) || 120)); touch(data.settings); persist(true); render(); toast('Updated'); },
 
@@ -3719,6 +3768,7 @@
     const fn = actions[el.dataset.action];
     if (fn) fn(el, e);
   });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target && e.target.id === 'f-topic' && !e.isComposing) { e.preventDefault(); actions.start(); } });
   document.addEventListener('click', (e) => { if (e.target.closest('#mini')) { ui.page = 'today'; render(); } });
   document.addEventListener('input', (e) => { const f = binds[e.target.dataset && e.target.dataset.bind]; if (f) f(e.target); });
   document.addEventListener('change', (e) => { const f = changes[e.target.dataset && e.target.dataset.change]; if (f) f(e.target); });
