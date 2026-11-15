@@ -434,7 +434,7 @@ input[type=color] { width: 100%; height: 42px; padding: 3px; border: 1px solid v
 .hl-row .hl { border-bottom: 0; background: #f8fafc; border-radius: 10px; padding: 10px 12px; }
 
 /* ---------- important topics note ---------- */
-.card.imp { padding: 0; overflow: hidden; }
+.card.imp, .card.ms { padding: 0; overflow: hidden; }
 .imp-bar { height: 22px; background: var(--blue-soft); border-bottom: 1px solid #dbeafe; display: flex; align-items: center; padding: 0 14px; }
 .imp-bar span { width: 34px; height: 4px; border-radius: 2px; background: #bfdbfe; }
 .imp-title { display: block; width: calc(100% - 36px); margin: 12px 18px 6px; padding: 4px 0; border: 0; border-radius: 0; background: transparent; font: inherit; font-size: 17px; font-weight: 700; color: var(--ink); text-decoration: underline; text-decoration-color: #93c5fd; text-decoration-thickness: 2px; text-underline-offset: 6px; box-shadow: none; }
@@ -589,3 +589,15 @@ input[type=color] { width: 100%; height: 42px; padding: 3px; border: 1px solid v
 .ib-chip small { color: var(--muted); }
 .ib-chip .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 @media (max-width: 760px) { .imp-list li { flex-wrap: wrap; row-gap: 2px; } .imp-item { flex-basis: 60%; } .ib-add { margin-left: 25px; } }
+
+.ms-title { margin: 12px 0 6px 18px; flex: 1; font-size: 16px; }
+.ms-n { display: inline-block; min-width: 20px; padding: 1px 7px; border-radius: 999px; background: #fee2e2; color: #b91c1c; font-size: 12px; font-weight: 700; text-align: center; vertical-align: middle; }
+.ms-list { list-style: none; margin: 4px 0 0; padding: 0; }
+.ms-list li { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 18px; border-top: 1px solid var(--line); }
+.ms-when { flex: none; width: 52px; display: flex; flex-direction: column; font-size: 12px; line-height: 1.25; }
+.ms-when span { color: var(--muted); }
+.ms-main { flex: 1; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13.5px; }
+.ms-main small { color: var(--muted); }
+.ms-main .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ms-nm { font-weight: 600; }
+@media (max-width: 760px) { .ms-list li { flex-wrap: wrap; } .ms-list .ib-add { margin-left: 62px; } }

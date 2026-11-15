@@ -222,6 +222,7 @@
     donut: { mode: 'type', sel: null },
     imp: { text: false },
     lib: { org: false, sel: [] },
+    ms: { open: (() => { try { return localStorage.getItem('st-ms-open') !== '0'; } catch (e) { return true; } })(), all: false },
     ib: { open: (() => { try { return localStorage.getItem('st-ib-open') !== '0'; } catch (e) { return true; } })() },
     undoOpen: (() => { try { return localStorage.getItem('st-undo-open') === '1'; } catch (e) { return false; } })(),
     rw: { open: {}, goalsDone: false, mode: 'day', date: null, month: null, from: null, to: null, logAll: false, set: (() => { try { return localStorage.getItem('st-pt-set') === '1'; } catch (e) { return false; } })() },
@@ -1922,6 +1923,7 @@
             <p class="note" style="margin-top:10px">${nDone} of ${blocks.length} ${blocks.length === 1 ? 'block' : 'blocks'} done</p>
           </div>
           ${importantCard()}
+          ${missedCard()}
           <div class="card">
             <h2>Templates &amp; copy</h2>
             <div class="field"><label>Save this day's plan as a template</label>
@@ -2003,6 +2005,44 @@
       <div class="imp-bar"><span></span></div>
       <div class="ib-head"><input class="imp-title" data-bind="imp-title" value="${esc(data.important.title)}" aria-label="Note title"><button class="btn sm" data-action="ib-toggle">${open ? 'Hide' : 'Show'}</button></div>
       ${open ? body : `<p class="note ib-sum">${items.length} ${items.length === 1 ? 'topic' : 'topics'} · ${todo.length} to plan${recent.length ? ` · ${recent.length} recent blocks` : ''}</p>`}
+    </div>`;
+  }
+
+  // every planned block (not break/sleep) on a finished day that got no time and wasn't skipped; days with no plan of their own repeat the last plan
+  function missedBlocks() {
+    const keys = Object.keys(data.plans).filter((k) => data.plans[k] && !data.plans[k].deleted).sort();
+    if (!keys.length) return [];
+    const hidden = data.settings.missedHidden || {}, last = addDays(activePlanDate(), -1), out = [];
+    for (let d = keys[0]; d <= last; d = addDays(d, 1)) {
+      if (isRest(d)) continue;
+      const plan = resolvePlan(d);
+      plan.blocks.forEach((b) => {
+        if (['break', 'sleep'].includes(kindOf(b.type)) || !b.topic || plan.skipped.includes(b.id) || hidden[d + '|' + b.id]) return;
+        if (blockActual(d, b.id) > 0) return;
+        out.push({ date: d, b, key: d + '|' + b.id });
+      });
+    }
+    return out.sort((x, y) => (x.date < y.date ? 1 : x.date > y.date ? -1 : offMin(x.b.start) - offMin(y.b.start)));
+  }
+  function setMissedHidden(keys, on) {
+    const h = Object.assign({}, data.settings.missedHidden || {});
+    keys.forEach((k) => { if (on) h[k] = Date.now(); else delete h[k]; });
+    data.settings.missedHidden = h; touch(data.settings); persist(true); render();
+  }
+  function missedCard() {
+    const list = missedBlocks(), open = ui.ms.open, shown = ui.ms.all ? list : list.slice(0, 15);
+    const row = (m, i) => `<li>
+      <div class="ms-when"><b>${fmtShort(m.date)}</b><span>${parseYmd(m.date).toLocaleDateString('en-IN', { weekday: 'short' })}</span></div>
+      <div class="ms-main"><span class="dot" style="background:${cat(m.b.type).color}"></span><span class="ms-nm">${esc(m.b.topic)}</span> <small>${m.b.start}–${m.b.end} · ${fmtDur(blockDur(m.b))}</small> ${prioPill(m.b.priority || 'medium')}</div>
+      <span class="ib-add"><button class="btn sm primary" data-action="ms-add" data-k="${esc(m.key)}">+ Timeline</button><button class="imp-x" data-action="ms-hide" data-k="${esc(m.key)}" aria-label="Remove from list" title="Remove from list">×</button></span>
+    </li>`;
+    return `<div class="card ms">
+      <div class="imp-bar"><span></span></div>
+      <div class="ib-head"><h2 class="ms-title">Missed topics${list.length ? ` <span class="ms-n">${list.length}</span>` : ''}</h2><button class="btn sm" data-action="ms-toggle">${open ? 'Hide' : 'Show'}</button></div>
+      ${!open ? `<p class="note ib-sum">${list.length ? `${list.length} missed ${list.length === 1 ? 'block' : 'blocks'}` : 'Nothing missed'}</p>`
+        : list.length ? `<ul class="ms-list">${shown.map(row).join('')}</ul>
+          <div class="imp-foot">${list.length > 15 ? `<button class="linkbtn" data-action="ms-more">${ui.ms.all ? 'Show fewer' : `Show all ${list.length}`}</button>` : ''}<button class="linkbtn" data-action="ms-clear">Remove all from list</button></div>`
+        : '<p class="note imp-empty">Blocks you plan but never start will show up here, so nothing slips away.</p>'}
     </div>`;
   }
 
@@ -3103,6 +3143,21 @@
       toast(`Added ${added.length} ${added.length === 1 ? 'topic' : 'topics'} to the timeline`, () => savePlan(date, (next) => { next.blocks = next.blocks.filter((x) => !added.includes(x.id)); }));
     },
     'ib-recent': (el) => { const e = recentBlocks(ttDate())[+el.dataset.i]; if (e) addBlock(ttDate(), { topic: e.topic, type: e.type, priority: e.priority, minutes: e.minutes, pref: offMin(e.start) }); },
+    'ms-toggle': () => { ui.ms.open = !ui.ms.open; try { localStorage.setItem('st-ms-open', ui.ms.open ? '1' : '0'); } catch (e) { /* ignore */ } render(); },
+    'ms-more': () => { ui.ms.all = !ui.ms.all; render(); },
+    'ms-hide': (el) => { const k = el.dataset.k; setMissedHidden([k], true); toast('Removed from the list', () => setMissedHidden([k], false)); },
+    'ms-clear': () => {
+      const keys = missedBlocks().map((m) => m.key);
+      if (keys.length && confirm(`Remove all ${keys.length} missed blocks from this list?`)) { setMissedHidden(keys, true); toast('List cleared', () => setMissedHidden(keys, false)); }
+    },
+    'ms-add': (el) => {
+      const m = missedBlocks().find((x) => x.key === el.dataset.k); if (!m) return;
+      const blk = addBlock(ttDate(), { topic: m.b.topic, type: m.b.type, priority: m.b.priority, minutes: blockDur(m.b) }, true);
+      if (!blk) { toast('No room left on this day'); return; }
+      const date = ttDate();
+      setMissedHidden([m.key], true);
+      toast(`Added ${m.b.topic}, ${blk.start}–${blk.end}`, () => { savePlan(date, (next) => { next.blocks = next.blocks.filter((x) => x.id !== blk.id); }); setMissedHidden([m.key], false); });
+    },
     // --- important topics
     'imp-add': () => {
       const el = $('#imp-new'), lines = String((el && el.value) || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
