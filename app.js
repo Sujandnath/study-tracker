@@ -3198,6 +3198,11 @@
       }
       acc += x.sec; last = x.en;
     });
+    // not studying right now: a long enough time away ends the round (and resets the chain if the 15 minutes ran out)
+    if (last !== null && !(tmLive && kindOf(tmLive.type) === 'study')) {
+      const away = (Date.now() - last) / 1000;
+      if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) k = 1; if (acc < ROUND_SEC || away > ROUND_RET) acc = 0; }
+    }
     return { k, acc, events, done: acc >= ROUND_SEC };
   }
   const roundNow = () => { const t = todayStr(); return roundsOf(live(data.sessions).filter((s) => s.date === t), data.timer); };
