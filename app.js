@@ -69,7 +69,7 @@
     medium: { label: 'Medium', color: '#d97706', bg: '#fffbeb' },
     low: { label: 'Low', color: '#059669', bg: '#ecfdf5' }
   };
-  const prioPill = (p) => `<span class="pill" style="background:${PRIOS[p].bg};color:${PRIOS[p].color}">${PRIOS[p].label}</span>`;
+  const prioPill = () => '';
   const typeDot = (t) => `<span class="tdot" style="background:${cat(t).color}"></span>`;
   const defaultLabel = (type) => { const k = kindOf(type); return k === 'break' ? 'Break' : k === 'sleep' ? 'Sleep' : k === 'study' ? 'Study session' : type === 'other' ? 'Activity' : cat(type).name; };
 
@@ -145,6 +145,7 @@
     for (const k of ['rest', 'checkins']) if (!d[k] || typeof d[k] !== 'object' || Array.isArray(d[k])) d[k] = {};
     if (!d.important || typeof d.important !== 'object' || Array.isArray(d.important)) d.important = {};
     if (!d.pointsCfg || typeof d.pointsCfg !== 'object' || Array.isArray(d.pointsCfg)) d.pointsCfg = { updatedAt: 0 };
+    d.pointsCfg.subjFrom = d.pointsCfg.subjFrom || todayStr(); // the daily every-subject goal starts counting the day it is first opened
     d.pointsCfg.startDate = d.pointsCfg.startDate || todayStr(); // points start counting the day this version is first opened
     if (d.pointsCfg.penalties === undefined) d.pointsCfg.penalties = true;
     if (!d.pointsCfg.v || typeof d.pointsCfg.v !== 'object') d.pointsCfg.v = {};
@@ -1093,7 +1094,6 @@
     }
     const work = list.filter(isWork);
     if (mode === 'subject') return subjectGroups(list, false).map((g) => ({ name: g.name, sec: g.sec, color: g.color }));
-    if (mode === 'prio') return Object.entries(PRIOS).map(([k, v]) => ({ name: v.label, sec: sum(work.filter((s) => s.priority === k)), color: v.color })).filter((x) => x.sec > 0);
     const map = new Map();
     work.forEach((s) => { const k = s.topic.toLowerCase(), e = map.get(k) || { name: s.topic, sec: 0 }; e.sec += s.seconds; map.set(k, e); });
     const rows = [...map.values()].sort((x, y) => y.sec - x.sec);
@@ -1123,7 +1123,7 @@
         </div>`).join('') : '<div class="note">Log some time and your split shows up here.</div>';
     return `
       <div class="seg donut-filter">
-        ${[['type', 'Type'], ...(live(data.subjects).length ? [['subject', 'Subject']] : []), ['topic', 'Topic'], ['prio', 'Importance']].map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-action="donut-mode" data-v="${k}">${l}</button>`).join('')}
+        ${[['type', 'Type'], ...(live(data.subjects).length ? [['subject', 'Subject']] : []), ['topic', 'Topic']].map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-action="donut-mode" data-v="${k}">${l}</button>`).join('')}
       </div>
       <div class="donut-wrap">
         <div class="donut"><svg viewBox="0 0 160 160" role="img" aria-label="Time split"><circle cx="80" cy="80" r="${R}" fill="none" stroke="#eef2f7" stroke-width="20"/>${arcs}</svg><div class="dc">${centre}</div></div>
@@ -1307,12 +1307,13 @@
     const x = existing || { name: '', color: DONUT_COLORS[live(data.subjects).length % DONUT_COLORS.length] };
     openModal(existing ? 'Edit subject' : 'New subject', `
       <div class="field"><label>Name</label><input type="text" id="sj-name" value="${esc(x.name)}" placeholder="e.g. Reasoning"></div>
-      <div class="field"><label>Colour</label><input type="color" id="sj-color" value="${esc(x.color)}"></div>`, () => {
+      <div class="field"><label>Colour</label><input type="color" id="sj-color" value="${esc(x.color)}"></div>
+      <label class="chk"><input type="checkbox" id="sj-weekly" ${x.noWeekly ? '' : 'checked'}> Counts for the “every subject” goals, daily and weekly <span class="note">(untick for non-study subjects like Routine)</span></label>`, () => {
       const name = $('#sj-name').value.trim();
       if (!name) { toast('Give the subject a name'); return false; }
       if (live(data.subjects).some((s) => s.name.toLowerCase() === name.toLowerCase() && (!existing || s.id !== existing.id))) { toast('A subject with that name already exists'); return false; }
       const rec = existing || { id: uid() };
-      Object.assign(rec, { name, color: $('#sj-color').value || x.color });
+      Object.assign(rec, { name, color: $('#sj-color').value || x.color, noWeekly: !$('#sj-weekly').checked });
       touch(rec);
       if (!existing) data.subjects.push(rec);
       persist(true); render();
@@ -1471,8 +1472,6 @@
               <button class="${f.mode === 'stopwatch' ? 'on' : ''}" data-action="set-mode" data-v="stopwatch">Stopwatch</button>
               <button class="${f.mode === 'countdown' ? 'on' : ''}" data-action="set-mode" data-v="countdown">Countdown</button></div>
               <span class="st-step"><button data-action="f-min-step" data-v="-5" aria-label="5 minutes less">−</button><input type="number" min="1" max="600" data-bind="f-minutes" value="${f.minutes}" aria-label="Minutes"><span>min</span><button data-action="f-min-step" data-v="5" aria-label="5 minutes more">+</button></span></div></div>
-          <div class="st-imp"><div class="st-lbl">Importance</div>
-            <div class="st-prios">${Object.entries(PRIOS).map(([k, v]) => `<button class="${f.priority === k ? 'on' : ''}" data-action="set-prio" data-v="${k}" style="--c:${v.color};--bg:${v.bg}"><i></i>${v.label}</button>`).join('')}</div></div>
         </div>
         ${presets.length ? `<div class="st-lbl">Presets</div><div class="st-pre">${presets.map((p) => `<button class="st-pr" data-action="use-preset" data-id="${p.id}">${esc(p.name)}</button>`).join('')}</div>` : ''}
         <div class="st-go"><button class="st-start" data-action="start">${stIcon('play', 20)}<span id="st-start-t">${esc(startLabel())}</span></button>
@@ -1525,7 +1524,6 @@
               <td class="num">${++n}</td>
               <td><div class="topic-cell">${typeDot(s.type)}${esc(s.topic)}${s.focus ? `<span class="ftag" title="Focus ${s.focus} of 5">★${s.focus}</span>` : ''}</div></td>
               <td>${fmtTime(s.start)}</td>
-              <td>${prioPill(s.priority)}</td>
               <td class="dur">${hms(s.seconds)}</td>
               <td class="cmt" title="${esc(s.comment)}">${esc(s.comment)}</td>
               <td class="act">
@@ -1536,7 +1534,7 @@
     }).join('');
     return `
       <div class="tbl-scroll"><table class="tbl">
-        <thead><tr><th>#</th><th>Topic</th><th>Time</th><th>Priority</th><th>Duration</th><th>Comment</th><th></th></tr></thead>
+        <thead><tr><th>#</th><th>Topic</th><th>Time</th><th>Duration</th><th>Comment</th><th></th></tr></thead>
         <tbody>${body}
         </tbody>
       </table></div>`;
@@ -1559,8 +1557,6 @@
       <div class="field"><label>Topic</label>
         <input type="text" id="m-topic" list="m-topics" value="${esc(s.topic || '')}" placeholder="Topic or label" autocomplete="off">
         <datalist id="m-topics">${live(data.topics).map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>
-      <div class="field"><label>Importance</label>
-        <select id="m-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${s.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
       <div class="row">
         <div class="field grow"><label>Date</label><input type="date" id="m-date" data-bind="m-calc" value="${ymd(startD)}"></div>
         <div class="field grow"><label>Start time</label><input type="time" id="m-time" data-bind="m-calc" value="${pad(startD.getHours())}:${pad(startD.getMinutes())}"></div>
@@ -1586,7 +1582,7 @@
       const [hh, mm] = ($('#m-time').value || '00:00').split(':').map(Number);
       const day = parseYmd(date); day.setHours(hh, mm, 0, 0);
       const topic = $('#m-topic').value.trim() || defaultLabel(type);
-      const prio = $('#m-prio').value;
+      const prio = (existing && existing.priority) || 'medium';
       const rec = existing || { id: uid() };
       Object.assign(rec, { date: sessionDate(type, day.getTime(), secs), start: day.getTime(), seconds: secs, topic, type, priority: prio, comment: $('#m-comment').value.trim() });
       { const fv = parseInt($('#m-focus').value, 10); if (fv >= 1 && fv <= 5) rec.focus = fv; else delete rec.focus; }
@@ -1684,7 +1680,7 @@
 
         <div class="two">
           ${subjectCard(all)}
-          <div class="card"><h2>By importance <small>study + other</small></h2>${prioBreakdown(all)}<div style="height:18px"></div><h2>Time split</h2>${splitBar(tot)}</div>
+          <div class="card"><h2>Time split</h2>${splitBar(tot)}</div>
         </div>
         ${pauseCard(r)}
         ${wr ? wr.highlights + wr.days : ''}
@@ -1870,14 +1866,14 @@
       <div class="field"><label>Name</label><input type="text" id="t-name" value="${esc(t.name)}" placeholder="e.g. Organic Chemistry"></div>
       <div class="field"><label>Type</label><select id="t-type">${cats().filter((x) => x.kind === 'study' || x.kind === 'neutral').map((x) => `<option value="${esc(x.id)}" ${t.type === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
       ${live(data.subjects).length ? `<div class="field"><label>Subject</label><select id="t-subj"><option value="">No subject</option>${live(data.subjects).sort((x, y) => x.name.localeCompare(y.name)).map((s) => `<option value="${s.id}" ${t.subjectId === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>` : ''}
-      <div class="field"><label>Default importance</label><select id="t-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>`,
+`,
     () => {
       const name = $('#t-name').value.trim();
       if (!name) { toast('Give the topic a name'); return false; }
       const dup = live(data.topics).find((x) => x.name.toLowerCase() === name.toLowerCase() && (!existing || x.id !== existing.id));
       if (dup) { toast('A topic with that name already exists'); return false; }
       const rec = existing || { id: uid() };
-      Object.assign(rec, { name, type: $('#t-type').value, priority: $('#t-prio').value });
+      Object.assign(rec, { name, type: $('#t-type').value, priority: (existing && existing.priority) || 'medium' });
       { const sj = $('#t-subj'); if (sj) { if (sj.value) rec.subjectId = sj.value; else delete rec.subjectId; } }
       touch(rec);
       if (!existing) data.topics.push(rec);
@@ -1893,7 +1889,6 @@
       <div class="field"><label>Topic (optional)</label><input type="text" id="p-topic" list="p-topics" value="${esc(p.topic)}" autocomplete="off">
         <datalist id="p-topics">${live(data.topics).map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>
       <div class="row">
-        <div class="field grow"><label>Importance</label><select id="p-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${p.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
         <div class="field grow"><label>Minutes (0 = stopwatch)</label><input type="number" id="p-min" min="0" max="600" value="${p.minutes}"></div>
       </div>`,
     () => {
@@ -1901,7 +1896,7 @@
       if (!name) { toast('Give the preset a name'); return false; }
       const rec = existing || { id: uid() };
       Object.assign(rec, {
-        name, type: $('#p-type').value, topic: $('#p-topic').value.trim(), priority: $('#p-prio').value,
+        name, type: $('#p-type').value, topic: $('#p-topic').value.trim(), priority: (existing && existing.priority) || 'medium',
         minutes: Math.max(0, parseInt($('#p-min').value, 10) || 0)
       });
       touch(rec);
@@ -2158,7 +2153,6 @@
       return `<li class="${i.done || sd ? 'done' : ''}">
         <input type="checkbox" data-change="imp-done" data-id="${i.id}" ${i.done ? 'checked' : ''} aria-label="Covered">
         <input class="imp-item" data-bind="imp-item" data-id="${i.id}" value="${esc(i.text)}" aria-label="Topic">
-        <button class="ib-prio" style="--c:${p.color};--bg:${p.bg}" data-action="ib-prio" data-id="${i.id}" title="Importance: ${p.label}. Tap to change">${p.label[0]}</button>
         ${sd ? '<span class="ib-state ok">Studied</span>' : ''}
         ${pb ? `<span class="ib-state">${pb.start}–${pb.end}</span>`
           : `<span class="ib-add"><button class="btn sm primary" data-action="ib-add" data-id="${i.id}" title="Add to the timeline">+ Timeline</button><button class="btn sm" data-action="ib-more" data-id="${i.id}" aria-label="Choose length and time">▾</button></span>`}
@@ -2306,7 +2300,6 @@
         <datalist id="b-topics">${live(data.topics).map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>
       <div class="row">
         <div class="field grow"><label>Type</label><select id="b-type">${optHtml(b.type)}</select></div>
-        <div class="field grow"><label>Importance</label><select id="b-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${b.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
       </div>
       <div class="row">
         <div class="field grow"><label>From</label><input type="time" id="b-start" data-bind="b-calc" value="${b.start}"></div>
@@ -2319,7 +2312,7 @@
       const start = $('#b-start').value, end = $('#b-end').value;
       if (!start || !end) { toast('Set both times'); return false; }
       if (start === end) { toast('Start and end cannot be the same'); return false; }
-      const rec = { id: existing ? existing.id : uid(), start, end, topic: $('#b-topic').value.trim(), type: $('#b-type').value, priority: $('#b-prio').value, note: $('#b-note').value.trim() };
+      const rec = { id: existing ? existing.id : uid(), start, end, topic: $('#b-topic').value.trim(), type: $('#b-type').value, priority: (existing && existing.priority) || 'medium', note: $('#b-note').value.trim() };
       if (rec.topic) ensureTopic(rec.topic, rec.type, rec.priority);
       savePlan(date, (next) => {
         const i = existing ? next.blocks.findIndex((x) => x.id === existing.id) : -1;
@@ -2508,10 +2501,10 @@
   //  timetable, check-ins, journal, sleep). Only rewards, redeemed items and
   //  the point settings are stored.
   // =====================================================================
-  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
+  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, subjDay: 30, subjMin: 20, missSubject: 5, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
   const PT_LABELS = [
     ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['meditate30', 'Meditation, per 30 minutes (paid per minute)'], ['meditateMax', 'Meditation: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
-    ['blockH', 'Study block done: high'], ['blockM', 'Study block done: medium'], ['blockL', 'Study block done: low'],
+    ['blockM', 'Study block done'], ['subjDay', 'Every subject studied today: reward'], ['subjMin', 'Minutes of study per subject to count today'], ['missSubject', 'Subject skipped today: penalty each'],
     ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
     ['missGoal', 'Missed goal: maximum penalty'], ['missBlock', 'Missed study block'], ['cap', 'Daily penalty cap'],
@@ -2537,13 +2530,11 @@
   const sgn = (n) => (n > 0 ? '+' + n : n < 0 ? '−' + Math.abs(n) : '0');
 
   const isMeditation = (s) => /medit|mindful|breathwork|breathing|pranayam|dhyan/i.test(cat(s.type).name + ' ' + s.topic);
-  // subjects a session counts toward for the weekly "every subject" goal: its topic, its activity name, or a subject of that same name (any non-sleep activity)
+  // a study session counts toward the weekly "every subject" goal through its topic's subject (study only)
   function weeklySubjectIds(s, tmap) {
-    if (kindOf(s.type) === 'sleep') return [];
-    const out = [], tp = (s.topic || '').toLowerCase(), cn = cat(s.type).name.toLowerCase();
-    [tp, cn].forEach((k) => { const t = tmap.get(k); if (t && t.subjectId) out.push(t.subjectId); });
-    live(data.subjects).forEach((x) => { const n = x.name.toLowerCase(); if (n === tp || n === cn) out.push(x.id); });
-    return out;
+    if (kindOf(s.type) !== 'study') return [];
+    const t = tmap.get((s.topic || '').toLowerCase());
+    return t && t.subjectId ? [t.subjectId] : [];
   }
   const isWorkout = (s) => !isMeditation(s) && /workout|exercise|gym|yoga|fitness/i.test(cat(s.type).name + ' ' + s.topic);
   function computePoints() {
@@ -2557,7 +2548,7 @@
     const tm = data.timer, tmElapsed = tm ? Math.round(elapsedMs(tm) / 1000) : 0;
     const studyDays = new Set(live(data.sessions).filter((s) => kindOf(s.type) === 'study').map((s) => s.date));
     const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t]));
-    const subs = live(data.subjects).filter((s) => live(data.topics).some((t) => t.subjectId === s.id));
+    const subs = live(data.subjects).filter((s) => !s.noWeekly && live(data.topics).some((t) => t.subjectId === s.id));
     const reds = live(data.redemptions);
     const loanBy = {}; live(data.loans).forEach((l) => { (loanBy[l.date] = loanBy[l.date] || []).push(l); });
     const repBy = {}; live(data.repayments).forEach((r) => { (repBy[r.date] = repBy[r.date] || []).push(r); });
@@ -2625,11 +2616,11 @@
         const dur = blockDur(b) * 60;
         let act = actual[d + '|' + b.id] || 0;
         if (isToday && tm && tm.blockId === b.id && tm.planDate === d) act += tmElapsed;
-        if (dur > 0 && (act >= dur * 0.9 || (act > 0 && (plan.completed || []).includes(b.id)))) { if (b.priority === 'high') doneH++; else if (b.priority === 'low') doneL++; else doneM++; }
+        if (dur > 0 && (act >= dur * 0.9 || (act > 0 && (plan.completed || []).includes(b.id)))) { doneM++; }
         else if (act === 0 && blockTimes(d, b).endMs < now) missed++;
       });
       const nd = doneH + doneM + doneL;
-      if (nd) add(`${nd} study ${nd === 1 ? 'block' : 'blocks'} done`, doneH * v.blockH + doneM * v.blockM + doneL * v.blockL, 'earn');
+      if (nd) add(`${nd} study ${nd === 1 ? 'block' : 'blocks'} done`, nd * v.blockM, 'earn');
       if (nb >= 2 && nd === nb && v.noMiss > 0) add('No-miss day', v.noMiss, 'earn');
       const nf = list.filter((s) => kindOf(s.type) === 'study' && s.focus >= 4 && s.seconds >= 1800).length;
       if (nf) add(`${nf} focused ${nf === 1 ? 'session' : 'sessions'}`, nf * v.focus, 'earn');
@@ -2693,11 +2684,20 @@
         });
         if (subs.every((s) => covered.has(s.id))) add('Every subject studied this week', v.allSubjects, 'earn');
       }
+      let subMiss = [];
+      if (subs.length >= 2 && d >= (cfg.subjFrom || start) && (v.subjDay > 0 || v.missSubject > 0)) {
+        const ss = new Map(subs.map((x) => [x.id, 0]));
+        list.forEach((x) => weeklySubjectIds(x, tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + x.seconds); }));
+        if (isToday && tm) weeklySubjectIds(tm, tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + tmElapsed); });
+        subMiss = subs.filter((x) => ss.get(x.id) < v.subjMin * 60);
+        if (!subMiss.length && v.subjDay > 0) add('Every subject studied today', v.subjDay, 'earn');
+      }
       const earned = items.reduce((n, i) => n + i.pts, 0);
       // penalties (only for finished days; rest days are protected). Today shows what would apply if it ended now.
       const pens = [];
       if (cfg.penalties && !isRest(d)) {
         if (goal > 0 && study < goal && !boughtPass(d)) { const p = Math.round(v.missGoal * (1 - study / goal)); if (p) pens.push({ label: 'Missed daily goal', pts: -p }); }
+        if (subMiss.length && v.missSubject > 0 && !boughtPass(d)) pens.push({ label: `${subMiss.length} ${subMiss.length === 1 ? 'subject' : 'subjects'} skipped`, pts: -subMiss.length * v.missSubject });
         if (missed) pens.push({ label: `${missed} missed ${missed === 1 ? 'block' : 'blocks'}`, pts: -missed * v.missBlock });
       }
       const rawPen = pens.reduce((n, p) => n + p.pts, 0), pen = Math.max(rawPen, -v.cap);
@@ -2956,13 +2956,13 @@
     if (v.goal > 0 && goalSec > 0) push({ id: 'goal', name: 'Daily study goal', pts: v.goal, state: st >= goalSec ? 'done' : 'open', pct: st / goalSec * 100, note: `${short(st)} of ${short(goalSec)} · ${more(goalSec, st)}`, dn: `${short(st)} studied` });
     // 3. study blocks
     { const plan = resolvePlan(today), blocks = plan.blocks.filter((b) => kindOf(b.type) === 'study' && !plan.skipped.includes(b.id));
-      if (blocks.length && (v.blockH || v.blockM || v.blockL)) {
+      if (blocks.length && v.blockM) {
         let done = 0, left = 0;
         blocks.forEach((b) => {
           const dur = blockDur(b) * 60; let act = sess.filter((s) => s.planDate === today && s.blockId === b.id).reduce((n, s) => n + s.seconds, 0);
           if (tm && tm.blockId === b.id && tm.planDate === today) act += tmEl;
           const ok = dur > 0 && (act >= dur * 0.9 || (act > 0 && (plan.completed || []).includes(b.id)));
-          if (ok) done++; else left += b.priority === 'high' ? v.blockH : b.priority === 'low' ? v.blockL : v.blockM;
+          if (ok) done++; else left += v.blockM;
         });
         push({ id: 'blocks', name: 'Study blocks', pts: done === blocks.length ? earnedFor(/study block/) : left, state: done === blocks.length ? 'done' : 'open', pct: done / blocks.length * 100, note: `${done} of ${blocks.length} study blocks done${left ? ` · +${left} still to earn` : ''}`, dn: `All ${blocks.length} blocks done${earnedFor(/study block/) ? ` · earned +${earnedFor(/study block/)}` : ''}` });
       } }
@@ -3006,8 +3006,19 @@
     // 8. streak milestone
     { const cur = streak(), next = [3, 7, 30].find((m) => m > cur);
       if (next && v['streak' + next] > 0) push({ id: 'streak', name: `${next}-day streak`, pts: v['streak' + next], state: 'open', pct: cur / next * 100, note: `${cur} of ${next} days${cur + 1 === next ? ' · study today to get it' : ` · ${next - cur} more day${next - cur === 1 ? '' : 's'}`}`, dots: next <= 10 ? { on: cur, total: next } : null }); }
+    // 8b. every subject today
+    { const subs = live(data.subjects).filter((s) => !s.noWeekly && live(data.topics).some((t) => t.subjectId === s.id));
+      if (subs.length >= 2 && (v.subjDay > 0 || v.missSubject > 0)) {
+        const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t])), ss = new Map(subs.map((x) => [x.id, 0]));
+        sess.forEach((x) => weeklySubjectIds(x, tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + x.seconds); }));
+        if (tm) weeklySubjectIds(tm, tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + tmEl); });
+        const need = v.subjMin * 60, okn = subs.filter((x) => ss.get(x.id) >= need).length, miss = subs.filter((x) => ss.get(x.id) < need);
+        push({ id: 'subjday', name: 'Every subject today', pts: v.subjDay, state: !miss.length ? 'done' : 'open', pct: okn / subs.length * 100,
+          note: `${okn} of ${subs.length} subjects${need ? ` (${short(need)} each)` : ''}${v.missSubject > 0 ? ` · −${v.missSubject} for each one skipped when the day ends` : ''}`,
+          chips: subs.map((x) => ({ n: ss.get(x.id) >= need ? x.name : `${x.name} · ${short(need - ss.get(x.id))} left`, ok: ss.get(x.id) >= need })), dn: `All ${subs.length} subjects studied today` });
+      } }
     // 9. every subject this week
-    { const subs = live(data.subjects).filter((s) => live(data.topics).some((t) => t.subjectId === s.id));
+    { const subs = live(data.subjects).filter((s) => !s.noWeekly && live(data.topics).some((t) => t.subjectId === s.id));
       if (subs.length && v.allSubjects > 0) {
         const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t])), cov = new Set();
         for (let d = weekStart(today); d <= today; d = addDays(d, 1)) live(data.sessions).filter((s) => s.date === d).forEach((s) => weeklySubjectIds(s, tmap).forEach((id) => cov.add(id)));
@@ -3590,10 +3601,9 @@
       const topics = live(data.topics).filter((x) => x.type === t.type);
       openModal('Switch topic', `
         <p class="note" style="margin-bottom:12px">Saves <b>${esc(t.topic || defaultLabel(t.type))}</b> (${short(Math.round(elapsedMs(t) / 1000))}) and starts the next one straight away, with no gap.</p>
-        <div class="field"><label>Next topic</label><input type="text" id="sw-topic" list="sw-list" autocomplete="off" placeholder="Type a topic or pick one"><datalist id="sw-list">${topics.map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>
-        <div class="field"><label>Importance</label><select id="sw-prio">${Object.entries(PRIOS).map(([k, v]) => `<option value="${k}" ${t.priority === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>`, () => {
+        <div class="field"><label>Next topic</label><input type="text" id="sw-topic" list="sw-list" autocomplete="off" placeholder="Type a topic or pick one"><datalist id="sw-list">${topics.map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist></div>`, () => {
         const topic = ($('#sw-topic').value || '').trim(); if (!topic) { toast('Type the next topic'); return false; }
-        const spec = { type: t.type, topic, priority: $('#sw-prio').value, mode: 'stopwatch', minutes: 0 }, prev = t.topic || defaultLabel(t.type), secs = Math.round(elapsedMs(t) / 1000);
+        const spec = { type: t.type, topic, priority: t.priority || 'medium', mode: 'stopwatch', minutes: 0 }, prev = t.topic || defaultLabel(t.type), secs = Math.round(elapsedMs(t) / 1000);
         stopTimer(true, { quiet: true }); startTimer(spec); toast(`Saved ${short(secs)} of ${prev}. Now on ${topic}`);
       }, 'Switch');
     },
