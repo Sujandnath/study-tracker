@@ -27,6 +27,14 @@
   const todayStr = () => ymd(new Date());
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const hms = (sec) => { sec = Math.max(0, Math.floor(sec)); return `${pad(Math.floor(sec / 3600))}:${pad(Math.floor(sec % 3600 / 60))}:${pad(sec % 60)}`; };
+  // turns http(s):// and www. links in plain text into clickable links (text is escaped first)
+  function linkify(text) {
+    return esc(text).replace(/\b((?:https?:\/\/|www\.)[^\s<]+)/gi, (u) => {
+      let tail = ''; while (/[.,;:!?)\]]$/.test(u)) { tail = u.slice(-1) + tail; u = u.slice(0, -1); }
+      const href = /^www\./i.test(u) ? 'https://' + u : u;
+      return `<a href="${href}" target="_blank" rel="noopener noreferrer" class="lnk">${u}</a>${tail}`;
+    });
+  }
   const short = (sec) => {
     sec = Math.round(sec);
     const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60);
@@ -154,6 +162,12 @@
     if (!d.settings.medSeeded) {
       if (!d.categories.some((x) => x.id === 'meditation' || (!x.deleted && /medit/i.test(x.name || '')))) d.categories.push({ id: 'meditation', name: 'Meditation', color: '#8b5cf6', kind: 'neutral', updatedAt: 0 });
       d.settings.medSeeded = true;
+    }
+    if (!d.settings.routineSeeded) { // small rewards for logging meals and showers, set once (editable on each category)
+      d.categories.forEach((x) => { if (x.deleted || x.earn || x.kind !== 'neutral') return;
+        if (/meal|breakfast|lunch|dinner|food/i.test(x.name || '')) x.earn = { pts: 2, max: 3, min: 10 };
+        else if (/shower|bath/i.test(x.name || '')) x.earn = { pts: 2, max: 1, min: 3 }; });
+      d.settings.routineSeeded = true;
     }
     if (!d.timer) d.timer = null;
     return d;
@@ -343,6 +357,7 @@
     if (immediate) store.save(data);
     else saveTimer = setTimeout(() => store.save(data), 300);
     scheduleSync();
+    bkSoon();
   }
 
   // =====================================================================
@@ -852,12 +867,18 @@
         <div class="field grow"><label>Colour</label><input type="color" id="c-color" value="${esc(x.color)}"></div>
         <div class="field grow"><label>Counts as</label><select id="c-kind" ${locked ? 'disabled' : ''}>${Object.entries(KINDS).map(([k, v]) => `<option value="${k}" ${x.kind === k ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
       </div>
-      <p class="note">Study counts towards your daily goal and streak. Break is rest. Sleep is tracked separately. Neutral is everything else.</p>`, () => {
+      <p class="note">Study counts towards your daily goal and streak. Break is rest. Sleep is tracked separately. Neutral is everything else.</p>
+      ${locked || x.kind === 'study' || x.kind === 'sleep' || x.kind === 'break' ? '' : `<div class="field" id="c-earnbox"><label class="chk"><input type="checkbox" id="c-earn" ${x.earn ? 'checked' : ''}> Small reward for logging this (routine)</label>
+        <div class="row" style="margin-top:8px"><div class="field grow"><label>Points each</label><input type="number" id="c-epts" min="1" max="20" value="${x.earn ? x.earn.pts : 2}"></div>
+        <div class="field grow"><label>Max per day</label><input type="number" id="c-emax" min="1" max="10" value="${x.earn ? x.earn.max : 1}"></div>
+        <div class="field grow"><label>Min minutes</label><input type="number" id="c-emin" min="0" max="120" value="${x.earn ? x.earn.min : 5}"></div></div></div>`}`, () => {
       const name = $('#c-name').value.trim();
       if (!name) { toast('Give the category a name'); return false; }
       if (cats().some((y) => y.name.toLowerCase() === name.toLowerCase() && (!existing || y.id !== existing.id))) { toast('A category with that name already exists'); return false; }
       const rec = existing || { id: uid() };
       Object.assign(rec, { name, color: $('#c-color').value || x.color, kind: locked ? existing.kind : $('#c-kind').value });
+      const eb = $('#c-earn');
+      rec.earn = eb && eb.checked && rec.kind === 'neutral' ? { pts: Math.max(1, +$('#c-epts').value || 2), max: Math.max(1, +$('#c-emax').value || 1), min: Math.max(0, +$('#c-emin').value || 0) } : null;
       touch(rec);
       if (!existing) data.categories.push(rec);
       persist(true); render();
@@ -1090,11 +1111,11 @@
       list.filter((s) => kindOf(s.type) !== 'sleep').forEach((s) => { m[s.type] = (m[s.type] || 0) + s.seconds; });
       if (ds.gapBreak) m.break = (m.break || 0) + ds.gapBreak;
       return Object.entries(m).filter(([, v]) => v > 0)
-        .map(([id, v]) => ({ name: cat(id).name + (id === 'break' && ds.gapBreak ? ' (incl. gaps)' : ''), sec: v, color: cat(id).color }))
+        .map(([id, v]) => ({ id, name: cat(id).name + (id === 'break' && ds.gapBreak ? ' (incl. gaps)' : ''), sec: v, color: cat(id).color }))
         .sort((x, y) => y.sec - x.sec);
     }
     const work = list.filter(isWork);
-    if (mode === 'subject') return subjectGroups(list, false).map((g) => ({ name: g.name, sec: g.sec, color: g.color }));
+    if (mode === 'subject') return subjectGroups(list, false).map((g) => ({ id: g.id, name: g.name, sec: g.sec, color: g.color }));
     const map = new Map();
     work.forEach((s) => { const k = s.topic.toLowerCase(), e = map.get(k) || { name: s.topic, sec: 0 }; e.sec += s.seconds; map.set(k, e); });
     const rows = [...map.values()].sort((x, y) => y.sec - x.sec);
@@ -1131,6 +1152,120 @@
         <div class="dl">${legend}</div>
       </div>`;
   }
+
+  // =====================================================================
+  //  SUMMARY CARD: period (day / week / month) x tab (activity, subject, topics, time of day, compare)
+  // =====================================================================
+  const SUM_TABS = [['type', 'Activity'], ['subject', 'Subject'], ['topic', 'Topics'], ['tod', 'Time of day'], ['cmp', 'Compare']];
+  const datesIn = (a, b) => { const o = []; for (let x = a, g = 0; x <= b && g < 400; x = addDays(x, 1), g++) o.push(x); return o; };
+  function sumRange(d, period) {
+    if (period === 'week') { const a = weekStart(d); return [a, addDays(a, 6)]; }
+    if (period === 'month') { const x = parseYmd(d); return [ymd(new Date(x.getFullYear(), x.getMonth(), 1)), ymd(new Date(x.getFullYear(), x.getMonth() + 1, 0))]; }
+    return [d, d];
+  }
+  function sumPrev(d, period) {
+    if (period === 'week') return sumRange(addDays(weekStart(d), -7), 'week');
+    if (period === 'month') { const x = parseYmd(d); return sumRange(ymd(new Date(x.getFullYear(), x.getMonth() - 1, 1)), 'month'); }
+    return [addDays(d, -1), addDays(d, -1)];
+  }
+  function sumData(a, b) {
+    const days = datesIn(a, b), sess = live(data.sessions).filter((s) => s.date >= a && s.date <= b);
+    let gapBreak = 0, untracked = 0, sleep = 0, sleepN = 0;
+    days.forEach((x) => { const ds = dayStats(x); gapBreak += ds.gapBreak; untracked += ds.untracked; if (ds.tot.sleep) { sleep += ds.tot.sleep; sleepN++; } });
+    const k = (kd) => sess.filter((s) => kindOf(s.type) === kd).reduce((n, s) => n + s.seconds, 0);
+    const study = k('study'), brk = k('break') + gapBreak;
+    return { days, sess, gapBreak, untracked, sleep, sleepN, study, brk, ratio: study + brk ? Math.round(study / (study + brk) * 100) : 0, entries: sess.length };
+  }
+  function todBuckets(sess) {
+    const b = [0, 1, 2, 3].map(() => ({ study: 0, other: 0 }));
+    sess.filter((s) => kindOf(s.type) !== 'sleep').forEach((s) => {
+      const kd = kindOf(s.type) === 'study' ? 'study' : 'other';
+      for (let t = 0; t < s.seconds; t += 60) { const h = new Date(s.start + t * 1000).getHours(); b[h >= 5 && h < 12 ? 0 : h >= 12 && h < 17 ? 1 : h >= 17 && h < 21 ? 2 : 3][kd] += Math.min(60, s.seconds - t); }
+    });
+    return b;
+  }
+  function longestStretch(sess) {
+    const st = sess.filter((s) => kindOf(s.type) === 'study').sort((x, y) => x.start - y.start);
+    let best = 0, cur = 0, end = null;
+    st.forEach((s) => { if (end !== null && s.start - end >= ROUND_BRK * 1000) cur = 0; cur += s.seconds; end = s.start + (s.seconds + (s.pausedSec || 0)) * 1000; best = Math.max(best, cur); });
+    return best;
+  }
+  const sgnT = (sec) => (sec > 0 ? '+' : sec < 0 ? '−' : '') + short(Math.abs(sec));
+  function sumCards(slices, total, withIcon) {
+    return slices.map((x, i) => `<div class="sm-c ${i === 0 && slices.length % 2 === 1 ? 'wide' : ''}" style="--c:${x.color}">
+        <span class="sm-ic">${withIcon && x.id ? stIcon(catIconKey(cat(x.id)), 18) : '<i></i>'}</span>
+        <div><b>${short(x.sec)}</b><span>${esc(x.name)} · ${total ? Math.round(x.sec / total * 100) : 0}%${x.n ? ` · ${x.n} ${x.n === 1 ? 'session' : 'sessions'}` : ''}</span></div></div>`).join('');
+  }
+  function summaryCard(d) {
+    const sm = ui.sum = ui.sum || { tab: 'type', period: 'day' };
+    if (!SUM_TABS.some(([k]) => k === sm.tab)) sm.tab = 'type';
+    const [a, b] = sumRange(d, sm.period), sd = sumData(a, b), today = todayStr(), isToday = d === today;
+    const tab = sm.tab, goal = data.settings.dailyGoalMin * 60;
+    const when = sm.period === 'day' ? (isToday ? 'today' : fmtShort(d)) : sm.period === 'week' ? (weekStart(today) === a ? 'this week' : `week of ${fmtShort(a)}`) : (today.slice(0, 7) === a.slice(0, 7) ? 'this month' : parseYmd(a).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }));
+    const slicesAll = donutSlices(sd.sess, { gapBreak: sd.gapBreak }, tab === 'subject' ? 'subject' : tab === 'topic' ? 'topic' : 'type');
+    const nSess = (name) => sd.sess.filter((s) => s.topic.toLowerCase() === name.toLowerCase()).length;
+    let hero = '', sub = '', badge = '', bar = '', body = '';
+    const barHtml = (items, tot) => `<div class="sm-bar">${items.filter((x) => x.sec > 0).map((x) => `<i style="flex:${x.sec};background:${x.color}" title="${esc(x.name)}"></i>`).join('') || '<i class="empty" style="flex:1"></i>'}</div>`;
+    const goalOk = goal && sd.study >= goal * Math.max(1, sd.days.filter((x) => x <= today).length);
+    if (tab === 'type' || tab === 'subject' || tab === 'topic') {
+      const total = slicesAll.reduce((n, x) => n + x.sec, 0);
+      const sl = tab === 'topic' ? slicesAll.map((x) => ({ ...x, n: x.name === 'Others' ? 0 : nSess(x.name) })) : slicesAll;
+      hero = total ? hms2(total) : '–';
+      sub = tab === 'type' ? `tracked ${when}` : tab === 'subject' ? `of study ${when} across ${slicesAll.filter((x) => x.name !== 'No subject').length} ${slicesAll.filter((x) => x.name !== 'No subject').length === 1 ? 'subject' : 'subjects'}` : `${slicesAll.length} ${slicesAll.length === 1 ? 'topic' : 'topics'} ${when}`;
+      badge = goal && sd.study ? `<span class="sm-badge ${goalOk ? 'ok' : ''}">${goalOk ? '✓ Study goal reached' : short(sd.study) + ' studied'}</span>` : '';
+      bar = barHtml(sl);
+      body = sl.length ? `<div class="sm-grid">${sumCards(sl, total, tab === 'type')}</div>` : '<div class="note" style="margin:14px 0">Log some time and your split shows up here.</div>';
+      if (tab === 'subject') {
+        const subs = live(data.subjects).filter((x) => !x.noWeekly && live(data.topics).some((t) => t.subjectId === x.id)), got = new Set(slicesAll.map((x) => x.id));
+        const miss = subs.filter((x) => !got.has(x.id));
+        if (miss.length) body += `<div class="sm-miss"><span>Not studied ${sm.period === 'day' ? 'yet' : 'in this period'}</span>${miss.map((x) => `<b>${esc(x.name)}</b>`).join('')}</div>`;
+      }
+    } else if (tab === 'tod') {
+      const bk = todBuckets(sd.sess), mx = Math.max(1, ...bk.map((x) => x.study + x.other)), best = bk.reduce((bi, x, i) => (x.study > bk[bi].study ? i : bi), 0);
+      const names = [['Morning', '5am–12pm'], ['Afternoon', '12–5pm'], ['Evening', '5–9pm'], ['Night', '9pm–5am']];
+      hero = bk[best].study ? names[best][0] : '–'; sub = bk[best].study ? `is your best time ${when} · ${short(bk[best].study)} of study` : `no study ${when}`;
+      bar = barHtml(names.map((n, i) => ({ name: n[0], sec: bk[i].study, color: ['#f59e0b', '#2563eb', '#8b5cf6', '#475569'][i] })));
+      body = `<div class="sm-tod">${names.map((n, i) => `<div class="sm-t"><div class="sm-th"><b>${n[0]}</b><span>${n[1]}</span></div>
+          <div class="sm-tb"><i class="st" style="width:${bk[i].study / mx * 100}%"></i><i class="ot" style="width:${bk[i].other / mx * 100}%"></i></div>
+          <div class="sm-tv"><b>${short(bk[i].study)}</b> study · ${short(bk[i].other)} other</div></div>`).join('')}</div>`;
+      const st = sd.sess.filter((s) => kindOf(s.type) === 'study').sort((x, y) => x.start - y.start);
+      const longest = sm.period === 'day' ? longestStretch(sd.sess) : Math.max(0, ...sd.days.map((x) => longestStretch(sd.sess.filter((s) => s.date === x))));
+      body += `<div class="sm-chips">${sm.period === 'day' && st.length ? `<span>▶ Started <b>${hmOf(st[0].start)}</b></span><span>■ Last study ended <b>${hmOf(st[st.length - 1].start + st[st.length - 1].seconds * 1000)}</b></span>` : ''}<span>⏱ Longest stretch <b>${short(longest)}</b></span></div>`;
+    } else {
+      let [pa, pb] = sumPrev(d, sm.period);
+      const ndays = sd.days.filter((x) => x <= today).length, partial = sm.period !== 'day' && ndays < sd.days.length;
+      if (partial) pb = addDays(pa, Math.max(0, ndays - 1)); // a week or month still in progress is compared with the same number of days before it
+      const pv = sumData(pa, pb), vs = sm.period === 'day' ? 'yesterday' : sm.period === 'week' ? 'last week' : 'last month';
+      const dS = sd.study - pv.study;
+      hero = sgnT(dS) === '0m' ? '±0' : sgnT(dS); sub = `of study ${when} vs ${vs}${partial ? ` (first ${ndays} ${ndays === 1 ? 'day' : 'days'})` : ''}`;
+      badge = sd.ratio || pv.ratio ? `<span class="sm-badge ${sd.ratio >= pv.ratio ? 'ok' : ''}">${sd.ratio}% study vs break</span>` : '';
+      const mx = Math.max(1, sd.study + sd.brk, pv.study + pv.brk);
+      const two = (label, x) => `<div class="sm-2"><span>${label}</span><div class="sm-bar"><i style="flex:${x.study};background:#2563eb"></i><i style="flex:${x.brk};background:#dc2626"></i></div></div>`;
+      bar = `<div class="sm-cmpbars">${two('Now', sd)}${two(vs[0].toUpperCase() + vs.slice(1), pv)}</div>`;
+      const row = (lab, now, prev, fmt, good) => { const df = now - prev, cls = df === 0 ? '' : (df > 0) === good ? 'up' : 'down'; return `<div class="sm-r"><span>${lab}</span><b>${fmt(now)}</b><i>${fmt(prev)}</i><em class="${cls}">${df === 0 ? '–' : (df > 0 ? '▲ ' : '▼ ') + (fmt === short ? short(Math.abs(df)) : Math.abs(df) + (fmt.pct ? '%' : ''))}</em></div>`; };
+      const pct = (v) => v + '%'; pct.pct = true;
+      const cnt = (v) => String(v);
+      body = `<div class="sm-rows"><div class="sm-r head"><span></span><b>Now</b><i>${vs[0].toUpperCase() + vs.slice(1)}</i><em>Change</em></div>
+        ${row('Study', sd.study, pv.study, short, true)}${row('Break incl. gaps', sd.brk, pv.brk, short, false)}${row('Study vs break', sd.ratio, pv.ratio, pct, true)}${row('Entries', sd.entries, pv.entries, cnt, true)}</div>`;
+      if (sm.period === 'day') {
+        const prev7 = sumData(addDays(d, -7), addDays(d, -1)), avg = Math.round(prev7.study / 7), dA = sd.study - avg;
+        body += `<div class="sm-chips"><span>📈 7-day average <b>${short(avg)}</b></span><span class="${dA >= 0 ? 'good' : 'bad'}">${dA >= 0 ? '▲' : '▼'} <b>${short(Math.abs(dA))}</b> ${dA >= 0 ? 'above' : 'below'} your average</span></div>`;
+      }
+    }
+    const nd = Math.max(1, sd.days.filter((x) => x <= today).length), gTot = goal * nd, gp = gTot ? Math.min(100, sd.study / gTot * 100) : 0;
+    const goalStrip = tab !== 'cmp' && goal ? `<div class="sm-goal"><div><span>${sm.period === 'day' ? 'Daily study goal' : 'Study goal for ' + nd + (nd === 1 ? ' day' : ' days')}</span><b class="${gp >= 100 ? 'ok' : ''}">${Math.round(sd.study / gTot * 100)}% · ${short(sd.study)} of ${short(gTot)}</b></div><div class="sm-gb"><i style="width:${gp}%"></i></div></div>` : '';
+    const sleepChip = sm.period === 'day' ? `🌙 ${sd.sleep ? `Slept <b>${short(sd.sleep)}</b> ${isToday ? 'last night' : 'that night'}` : 'No sleep logged'}` : `🌙 ${sd.sleepN ? `Slept <b>${short(Math.round(sd.sleep / sd.sleepN))}</b> avg per night` : 'No sleep logged'}`;
+    return `<div class="card sum">
+      <h2>Summary <small>${sd.entries} ${sd.entries === 1 ? 'entry' : 'entries'}</small></h2>
+      <div class="sm-ctl"><div class="seg sm-per">${[['day', 'Day'], ['week', 'Week'], ['month', 'Month']].map(([k, l]) => `<button class="${sm.period === k ? 'on' : ''}" data-action="sum-period" data-v="${k}">${l}</button>`).join('')}</div></div>
+      <div class="seg sm-tabs">${SUM_TABS.map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-action="sum-tab" data-v="${k}">${l}</button>`).join('')}</div>
+      <div class="sm-hero"><div><div class="sm-big">${hero}</div><div class="sm-sub">${sub}</div></div>${badge}</div>
+      ${bar}${body}${goalStrip}
+      <div class="sm-foot"><span class="sm-chip lav">${sleepChip}</span>${sd.untracked ? `<span class="sm-chip">⏳ <b>${short(sd.untracked)}</b> untracked <small>gaps over ${fmtDur(gapCapMin())}</small></span>` : ''}${sm.period === 'day' ? '<button class="linkbtn" data-action="sleep-log">Log sleep</button>' : ''}</div>
+      ${sm.period === 'day' ? restLine(d) : ''}
+    </div>`;
+  }
+  const hms2 = (sec) => { sec = Math.round(sec); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60); return h ? `${h}h ${pad(m)}m` : `${m}m`; };
   function goalBox(study, goal) {
     if (!goal) return '';
     const pct = Math.min(100, study / goal * 100), R = 30, C = 2 * Math.PI * R;
@@ -1346,6 +1481,7 @@
         </div>
       </div>
       ${installBanner()}
+      ${bkBanner()}
       <div class="grid">
         <div class="stack">
           <div class="card ${focusLocked() ? 'timer-live' : ''}">${timerCard()}</div>
@@ -1353,13 +1489,7 @@
           ${dayTimelineCard(d)}
         </div>
         <div class="stack">
-          <div class="card">
-            <h2>Summary <small>${list.length} ${list.length === 1 ? 'entry' : 'entries'}</small></h2>
-            ${donutCard(list, ds)}
-            ${goalBox(tot.study, goal)}
-            ${sleepLine(d, ds)}
-            ${restLine(d)}
-          </div>
+          ${summaryCard(d)}
           <div class="card">
             <h2>Journal <button class="linkbtn" data-action="nav" data-page="journal">All entries →</button></h2>
             <textarea data-bind="journal" placeholder="How did the day go? What clicked, what to revisit…">${esc(journal)}</textarea>
@@ -1845,6 +1975,7 @@
               <button class="btn" data-action="import">Import &amp; merge</button>
             </div>
             <p class="note" style="margin-top:12px">Backups are plain JSON. Importing <b>merges</b> by record, so nothing is overwritten blindly – the same file format is used for syncing between devices.</p>
+            ${backupCard()}
             <p class="note" id="loc" style="margin-top:8px"></p>
           </div>
         </div>
@@ -2017,7 +2148,7 @@
           <div class="bmain">
             <div class="btopic">${typeDot(b.type)}${esc(b.topic || defaultLabel(b.type))}</div>
             <div class="bmeta">${spill(st)} <span>Planned ${fmtDur(dur)}${st.act ? ' · Did ' + short(st.act) : ''}</span></div>
-            ${b.note ? `<div class="note" style="margin-top:4px">${esc(b.note)}</div>` : ''}
+            ${b.note ? `<div class="note" style="margin-top:4px">${linkify(b.note)}</div>` : ''}
           </div>
           <div class="bact">
             ${canStart ? `<button class="btn sm primary" data-action="tt-start" data-date="${date}" data-id="${b.id}">${st.act && st.key !== 'done' ? 'Resume' : 'Start'}</button>` : ''}
@@ -2390,19 +2521,20 @@
     if (!plan.blocks.length) return '';
     const now = Date.now();
     const list = sortBlocks(plan.blocks).map((b) => ({ b, ...blockTimes(pd, b), st: blockStatus(pd, b, plan) }));
-    const cur = list.find((x) => x.startMs <= now && now < x.endMs && !['done', 'skipped'].includes(x.st.key));
-    const nxt = list.find((x) => x.startMs > now && x.st.key !== 'skipped');
-    const it = cur || nxt;
-    const head = `<h2>${it ? (cur ? 'Now in your timetable' : 'Up next') : 'Timetable'} <button class="linkbtn" data-action="nav" data-page="timetable">Open timetable →</button></h2>`;
-    if (!it) return `<div class="card">${head}<p class="note">Every planned block for today is finished or skipped.</p></div>`;
-    const b = it.b, dur = blockDur(b);
+    // up to 3 blocks that are on now or still to come (finished, skipped and missed ones are left out)
+    const items = list.filter((x) => !['done', 'skipped'].includes(x.st.key) && x.endMs > now).slice(0, 3);
+    const cur = items.length && items[0].startMs <= now;
+    const head = `<h2>${items.length ? (cur ? 'Now in your timetable' : 'Up next') : 'Timetable'} <button class="linkbtn" data-action="nav" data-page="timetable">Open timetable →</button></h2>`;
+    if (!items.length) return `<div class="card">${head}<p class="note">Every planned block for today is finished or skipped.</p></div>`;
     return `<div class="card">${head}
-      <div class="blk" style="padding:0">
+      ${items.map((it, k) => { const b = it.b, dur = blockDur(b), now1 = it.startMs <= now;
+        return `<div class="blk" style="padding:${k ? '10px' : '0'} 0 0">
         <div class="btime">${b.start} – ${b.end}<small>${fmtDur(dur)}</small></div>
         <div class="bmain"><div class="btopic">${typeDot(b.type)}${esc(b.topic || defaultLabel(b.type))}</div>
-          <div class="bmeta">${spill(it.st)}</div></div>
-        <div class="bact"><button class="btn sm primary" data-action="tt-start" data-date="${pd}" data-id="${b.id}">${it.st.act ? 'Resume' : 'Start'}</button></div>
-      </div></div>`;
+          <div class="bmeta">${spill(it.st)}</div>
+          ${b.note ? `<div class="note" style="margin-top:4px">${linkify(b.note)}</div>` : ''}</div>
+        <div class="bact"><button class="btn sm ${k === 0 || now1 ? 'primary' : ''}" data-action="tt-start" data-date="${pd}" data-id="${b.id}">${it.st.act ? 'Resume' : 'Start'}</button></div>
+      </div>`; }).join('')}</div>`;
   }
 
   // Progress page: how much of the planned study time was actually done
@@ -2492,10 +2624,10 @@
   //  timetable, check-ins, journal, sleep). Only rewards, redeemed items and
   //  the point settings are stored.
   // =====================================================================
-  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, roundBase: 10, roundStep: 5, roundCap: 40, subjDay: 30, subjMin: 20, missSubject: 5, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
+  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, roundBase: 10, roundStep: 5, roundCap: 40, routineCap: 10, subjDay: 30, subjMin: 20, missSubject: 5, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
   const PT_LABELS = [
     ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['meditate30', 'Meditation, per 30 minutes (paid per minute)'], ['meditateMax', 'Meditation: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
-    ['blockM', 'Study block done'], ['roundBase', 'Focus round 2 reward (1h of study, then a break and back in 15 min)'], ['roundStep', 'Focus rounds: extra for each round after'], ['roundCap', 'Focus rounds: maximum reward'], ['subjDay', 'Every subject studied today: reward'], ['subjMin', 'Minutes of study per subject to count today'], ['missSubject', 'Subject skipped today: penalty each'],
+    ['blockM', 'Study block done'], ['routineCap', 'Routine logging (meals, shower…): maximum points per day'], ['roundBase', 'Focus round 2 reward (1h of study, then a break and back in 15 min)'], ['roundStep', 'Focus rounds: extra for each round after'], ['roundCap', 'Focus rounds: maximum reward'], ['subjDay', 'Every subject studied today: reward'], ['subjMin', 'Minutes of study per subject to count today'], ['missSubject', 'Subject skipped today: penalty each'],
     ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
     ['missGoal', 'Missed goal: maximum penalty'], ['missBlock', 'Missed study block'], ['cap', 'Daily penalty cap'],
@@ -2675,6 +2807,7 @@
         });
         if (subs.every((s) => covered.has(s.id))) add('Every subject studied this week', v.allSubjects, 'earn');
       }
+      if (v.routineCap > 0) { let room = v.routineCap; routineInfo(list, isToday ? tm : null).forEach((r) => { const p = Math.min(room, r.n * r.c.earn.pts); if (p > 0) { add(`Routine: ${r.c.name}${r.n > 1 ? ' ×' + r.n : ''}`, p, 'earn'); room -= p; } }); }
       if (v.roundBase > 0) roundsOf(list, isToday ? tm : null).events.forEach((e) => add(`Focus round ${e.k} done`, e.pts, 'earn'));
       let subMiss = [];
       if (subs.length >= 2 && d >= (cfg.subjFrom || start) && (v.subjDay > 0 || v.missSubject > 0)) {
@@ -2850,7 +2983,7 @@
   const itemKey = (l) => /^Study \d|^Study$/.test(l) ? 'Study time' : /^Workout/.test(l) ? 'Workout' : /^Meditation/.test(l) ? 'Meditation' : /^Daily goal/.test(l) ? 'Daily goal' : /^Stretch/.test(l) ? 'Stretch goal'
     : /study blocks? done/.test(l) ? 'Study blocks done' : /focused/.test(l) ? 'Focused sessions' : /^Evening check-in/.test(l) ? 'Evening check-in' : /^Journal/.test(l) ? 'Journal' : /^Sleep/.test(l) ? 'Sleep logged'
     : /-day streak/.test(l) ? 'Streak bonuses' : /^Every subject/.test(l) ? 'All subjects studied' : /^Planned the day/.test(l) ? 'Planned early' : /^Missed daily goal/.test(l) ? 'Missed daily goal'
-    : /^Focus round/.test(l) ? 'Focus rounds' : /missed blocks?/.test(l) ? 'Missed study blocks' : /penalty cap/.test(l) ? 'Daily penalty cap' : l;
+    : /^Routine:/.test(l) ? 'Routine logging' : /^Focus round/.test(l) ? 'Focus rounds' : /missed blocks?/.test(l) ? 'Missed study blocks' : /penalty cap/.test(l) ? 'Daily penalty cap' : l;
   function rwRange(today) {
     const r = ui.rw, m = r.mode, anchor = r.date && r.date <= today ? r.date : today;
     if (m === 'week') { const s = weekStart(anchor); return { from: s, to: addDays(s, 6) < today ? addDays(s, 6) : today }; }
@@ -3002,6 +3135,15 @@
     if (v.roundBase > 0) { const rs = roundNow(), nx = roundPts(rs.k), got = rs.events.reduce((n, e) => n + e.pts, 0);
       push({ id: 'rounds', name: 'Focus rounds', pts: nx, state: 'open', pct: Math.min(100, rs.acc / ROUND_SEC * 100),
         note: `${rs.done ? `Round ${rs.k}: break due (10 min, back within 15)` : `Round ${rs.k} · ${short(rs.acc)} of 1h`}${nx ? ` · +${nx} when you return from the break` : ' · round 1 starts your chain'}${got ? ` · earned +${got} today` : ''}` }); }
+    // 8a2. routine logging
+    if (v.routineCap > 0) { const ri = routineInfo(sess, tm);
+      if (ri.length) {
+        let room = v.routineCap, left = 0; ri.forEach((r) => { const e = Math.min(room, r.n * r.c.earn.pts); room -= e; left += (r.max - r.n) * r.c.earn.pts; });
+        left = Math.min(left, room); const tot = ri.reduce((n, r) => n + r.max, 0), got = ri.reduce((n, r) => n + r.n, 0);
+        push({ id: 'routine', name: 'Routine logging', pts: left, state: got >= tot || (left <= 0) ? 'done' : 'open', pct: got / tot * 100,
+          note: `Log them to earn: ${ri.map((r) => `${r.c.name} +${r.c.earn.pts}${r.max > 1 ? ' each' : ''}${r.c.earn.min ? ` (${r.c.earn.min}+ min)` : ''}`).join(' · ')} · max +${v.routineCap} a day`,
+          chips: ri.map((r) => ({ n: `${r.c.name} ${r.n}/${r.max}`, ok: r.n >= r.max })), dn: `Routine logged · +${Math.min(v.routineCap, ri.reduce((n, r) => n + r.n * r.c.earn.pts, 0))}` });
+      } }
     // 8b. every subject today
     { const subs = live(data.subjects).filter((s) => !s.noWeekly && live(data.topics).some((t) => t.subjectId === s.id));
       if (subs.length >= 2 && (v.subjDay > 0 || v.missSubject > 0)) {
@@ -3204,6 +3346,14 @@
       if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) k = 1; if (acc < ROUND_SEC || away > ROUND_RET) acc = 0; }
     }
     return { k, acc, events, done: acc >= ROUND_SEC };
+  }
+  // routine logging: small rewards for categories that have "earn" set (meals, shower...), capped per day
+  function routineInfo(sessList, tmLive) {
+    const tmSec = tmLive ? Math.round(elapsedMs(tmLive) / 1000) : 0;
+    return live(data.categories).filter((c) => c.earn && c.earn.pts > 0 && c.kind === 'neutral').map((c) => {
+      const min = (c.earn.min || 0) * 60, have = sessList.filter((x) => x.type === c.id && x.seconds >= min).length + (tmLive && tmLive.type === c.id && tmSec >= min ? 1 : 0);
+      return { c, n: Math.min(have, c.earn.max || 1), max: c.earn.max || 1 };
+    });
   }
   const roundNow = () => { const t = todayStr(); return roundsOf(live(data.sessions).filter((s) => s.date === t), data.timer); };
   const rndText = () => { const r = roundNow(); return r.done ? `Round ${r.k} · break due` : `Round ${r.k} · ${Math.floor(r.acc / 60)}/60 min`; };
@@ -3707,6 +3857,22 @@
       if (ci[k] === v) delete ci[k]; else ci[k] = v;
       ci.updatedAt = Date.now(); data.checkins[d] = ci; persist(true); render();
     },
+    'bk-choose': async () => {
+      try {
+        const h = await window.showDirectoryPicker({ mode: 'readwrite', id: 'studytracker-backup' });
+        await bkIdb('readwrite', (st) => st.put(h, 'dir'));
+        BK.dir = h; BK.state = 'on'; BK.err = ''; BK.sig = '';
+        const ok = await bkRun(true); toast(ok ? `Backup saved to “${h.name}”` : 'Could not write to that folder'); render();
+      } catch (e) { if (!e || e.name !== 'AbortError') toast('Could not set up the backup folder'); }
+    },
+    'bk-allow': async () => {
+      try { const p = await BK.dir.requestPermission({ mode: 'readwrite' }); if (p === 'granted') { BK.state = 'on'; BK.err = ''; await bkRun(true); toast('Automatic backup is on'); } else toast('Permission was not given'); } catch { toast('Could not ask for permission'); }
+      render();
+    },
+    'bk-now': async () => { const ok = await bkRun(true); toast(ok ? 'Backup saved' : 'Backup failed'); render(); },
+    'bk-stop': async () => { if (!confirm('Stop automatic backups? Files already in the folder stay there.')) return; try { await bkIdb('readwrite', (st) => st.delete('dir')); } catch { /* ignore */ } BK.dir = null; BK.state = 'off'; BK.last = 0; BK.files = 0; bkSaveMeta(); render(); },
+    'sum-tab': (el) => { ui.sum = ui.sum || { tab: 'type', period: 'day' }; ui.sum.tab = el.dataset.v; render(); },
+    'sum-period': (el) => { ui.sum = ui.sum || { tab: 'type', period: 'day' }; ui.sum.period = el.dataset.v; render(); },
     'donut-mode': (el) => { ui.donut.mode = el.dataset.v; ui.donut.sel = null; render(); },
     'donut-pick': (el) => { const i = +el.dataset.i; ui.donut.sel = ui.donut.sel === i ? null : i; render(); },
     'install-now': async () => {
@@ -3871,6 +4037,83 @@
   document.addEventListener('input', (e) => { const f = binds[e.target.dataset && e.target.dataset.bind]; if (f) f(e.target); });
   document.addEventListener('change', (e) => { const f = changes[e.target.dataset && e.target.dataset.change]; if (f) f(e.target); });
 
+
+  // =====================================================================
+  //  AUTOMATIC FOLDER BACKUP (second safety net, separate from the Gist sync).
+  //  Chrome / Edge on a computer: you pick a folder once and the app keeps one
+  //  dated backup file per day in it (the last 30 days). Same file format as
+  //  "Export backup", so "Import & merge" restores it.
+  // =====================================================================
+  const BK_KEEP = 30, BK_RE = /^study-tracker-backup-(\d{4}-\d{2}-\d{2})\.json$/;
+  const BK = { dir: null, state: 'off', last: 0, files: 0, err: '', busy: false, sig: '', timer: null };
+  const bkSupported = () => typeof window.showDirectoryPicker === 'function' && typeof indexedDB !== 'undefined';
+  const bkIdb = (mode, fn) => new Promise((resolve, reject) => {
+    const r = indexedDB.open('studytracker-backup', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onerror = () => reject(r.error);
+    r.onsuccess = () => { const db = r.result, tx = db.transaction('kv', mode), q = fn(tx.objectStore('kv')); tx.oncomplete = () => { db.close(); resolve(q && q.result); }; tx.onerror = () => reject(tx.error); };
+  });
+  const bkMeta = () => { try { return JSON.parse(localStorage.getItem('st-bk-meta') || '{}'); } catch { return {}; } };
+  const bkSaveMeta = () => { try { localStorage.setItem('st-bk-meta', JSON.stringify({ last: BK.last, files: BK.files })); } catch { /* ignore */ } };
+  const bkStatusText = () => {
+    if (!bkSupported()) return 'Needs Chrome or Edge on a computer.';
+    if (BK.state === 'off') return 'Not set up.';
+    const when = BK.last ? new Date(BK.last).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'not yet';
+    if (BK.err) return `Problem: ${BK.err}`;
+    if (BK.state === 'needs') return `Paused. Click “Allow” so backups can continue. Last backup: ${when}.`;
+    return `Saving to “${BK.dir && BK.dir.name}”. Last backup: ${when} · ${BK.files} ${BK.files === 1 ? 'file' : 'files'} kept.`;
+  };
+  const bkPaint = () => { const el = $('#bk-status'); if (el) el.textContent = bkStatusText(); };
+  async function bkInit() {
+    const m = bkMeta(); BK.last = m.last || 0; BK.files = m.files || 0;
+    if (!bkSupported()) return;
+    try {
+      BK.dir = await bkIdb('readonly', (st) => st.get('dir')) || null;
+      if (!BK.dir) { BK.state = 'off'; return; }
+      const p = await BK.dir.queryPermission({ mode: 'readwrite' });
+      BK.state = p === 'granted' ? 'on' : 'needs';
+      if (BK.state === 'on') bkRun(true);
+      else render();
+    } catch (e) { BK.state = 'off'; }
+    setInterval(() => bkRun(false), 15 * 60000);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) bkRun(false); });
+  }
+  function bkSoon() { if (BK.state !== 'on') return; clearTimeout(BK.timer); BK.timer = setTimeout(() => bkRun(false), 60000); }
+  async function bkRun(force) {
+    if (BK.state !== 'on' || !BK.dir || BK.busy || !data) return false;
+    BK.busy = true;
+    try {
+      const body = JSON.stringify(data, null, 2), sig = body.length + ':' + body.slice(0, 64) + body.slice(-64);
+      if (!force && sig === BK.sig) return true;
+      const name = `study-tracker-backup-${todayStr()}.json`;
+      const fh = await BK.dir.getFileHandle(name, { create: true });
+      const w = await fh.createWritable(); await w.write(body); await w.close();
+      BK.sig = sig;
+      const names = [];
+      for await (const [n, h] of BK.dir.entries()) if (h.kind === 'file' && BK_RE.test(n)) names.push(n);
+      names.sort().reverse();
+      for (const old of names.slice(BK_KEEP)) { try { await BK.dir.removeEntry(old); } catch { /* ignore */ } }
+      BK.files = Math.min(names.length, BK_KEEP); BK.last = Date.now(); BK.err = ''; bkSaveMeta();
+      return true;
+    } catch (e) {
+      BK.err = (e && e.name === 'NotAllowedError') ? '' : String((e && e.message) || e).slice(0, 80);
+      if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) BK.state = 'needs';
+      return false;
+    } finally { BK.busy = false; bkPaint(); }
+  }
+  function backupCard() {
+    const ok = bkSupported(), st = BK.state;
+    return `<div class="bk-card"><div class="lbl">Automatic backup to a folder</div>
+      <p class="note" id="bk-status" style="margin:4px 0 10px">${esc(bkStatusText())}</p>
+      ${!ok ? '<p class="note">On your phone, use <b>Export backup</b> above. Your data is also kept in the Gist sync.</p>'
+        : `<div class="row">${st === 'off' ? '<button class="btn primary" data-action="bk-choose">Choose backup folder</button>'
+          : st === 'needs' ? '<button class="btn primary" data-action="bk-allow">Allow</button><button class="btn" data-action="bk-choose">Change folder</button>'
+          : '<button class="btn" data-action="bk-now">Back up now</button><button class="btn" data-action="bk-choose">Change folder</button>'}${st !== 'off' ? '<button class="btn danger" data-action="bk-stop">Stop</button>' : ''}</div>
+        <p class="note" style="margin-top:8px">One file per day, the last ${BK_KEEP} days are kept. Pick a folder that OneDrive or Google Drive syncs to get a copy outside your computer. To restore, use <b>Import &amp; merge</b> and choose a file.</p>`}
+    </div>`;
+  }
+  const bkBanner = () => BK.state === 'needs' ? `<div class="install bk-banner"><span>Automatic backup is paused until you allow it again.</span><button class="btn sm primary" data-action="bk-allow">Allow</button></div>` : '';
+
   // ---------- boot ----------
   (async function init() {
     data = normalize(await store.load());
@@ -3880,6 +4123,7 @@
     try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { /* ignore */ }
     setInterval(tick, 500);
     if (sync.token) runSync();
+    bkInit();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
     window.__st = { get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
