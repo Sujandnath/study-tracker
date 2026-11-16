@@ -580,7 +580,6 @@ input[type=color] { width: 100%; height: 42px; padding: 3px; border: 1px solid v
 .ib-add { display: inline-flex; gap: 4px; flex: none; }
 .ib-state { flex: none; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: var(--blue-soft); color: #1d4ed8; white-space: nowrap; }
 .ib-state.ok { background: #dcfce7; color: #15803d; }
-.ib-prio { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--c); background: var(--bg); color: var(--c); font-size: 11px; font-weight: 800; cursor: pointer; padding: 0; line-height: 1; }
 .ib-recent { margin: 10px 18px 6px; }
 .ib-recent .lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 6px; }
 .ib-chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -714,14 +713,6 @@ input[type=color] { width: 100%; height: 42px; padding: 3px; border: 1px solid v
 .st-step input { width: 52px; text-align: center; border: 0; border-bottom: 2px solid #bfdbfe; border-radius: 0; background: transparent; font: inherit; font-weight: 700; padding: 2px 0; outline: 0; box-shadow: none; -moz-appearance: textfield; }
 .st-step input::-webkit-outer-spin-button, .st-step input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .st-step span { color: #64748b; font-weight: 500; font-size: 13px; }
-.st-imp { overflow: hidden; max-height: 120px; transition: max-height .35s ease, opacity .3s ease; }
-.startcard.no-imp .st-imp { max-height: 0; opacity: 0; pointer-events: none; }
-.startcard.no-imp .st-row { grid-template-columns: 1fr; }
-.st-prios { display: flex; gap: 8px; }
-.st-prios button { flex: 1; border: 1px solid var(--line); background: #fff; border-radius: 12px; padding: 9px 4px; font: inherit; font-size: 12.5px; font-weight: 600; color: #475569; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; transition: background .2s, border-color .2s, color .2s, transform .15s; }
-.st-prios button i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
-.st-prios button:hover { transform: translateY(-1px); }
-.st-prios button.on { background: var(--bg); border-color: var(--c); color: var(--c); }
 .st-pre { display: flex; gap: 8px; flex-wrap: wrap; }
 .st-pr { border: 0; border-radius: 12px; background: #eff6ff; color: #1d4ed8; font: inherit; font-weight: 600; font-size: 13px; padding: 8px 14px; cursor: pointer; transition: background .15s, transform .15s; }
 .st-pr:hover { background: #dbeafe; transform: translateY(-1px); }
@@ -738,7 +729,7 @@ input[type=color] { width: 100%; height: 42px; padding: 3px; border: 1px solid v
   .st-tiles { grid-template-columns: repeat(4, 1fr); gap: 8px; } .st-go { flex-direction: column; align-items: stretch; } .st-ghost { height: 50px; justify-content: center; }
   .st-start { height: 56px; } .startcard h2 { font-size: 20px; }
 }
-@media (prefers-reduced-motion: reduce) { .st-tile, .st-tile .ic, .st-step, .st-imp, .st-chips.swap .st-chip { animation: none !important; transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { .st-tile, .st-tile .ic, .st-step, .st-chips.swap .st-chip { animation: none !important; transition: none !important; } }
 
 .gl-dots { display: flex; gap: 5px; }
 .gl-dots i { width: 14px; height: 6px; border-radius: 3px; background: var(--blue-soft); }

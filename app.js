@@ -64,12 +64,6 @@
   const optHtml = (sel) => catOptions(sel).map((x) => `<option value="${esc(x.id)}" ${sel === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
   const isWork = (s) => { const k = kindOf(s.type); return k === 'study' || k === 'neutral'; };
   const sessionDate = (type, startMs, secs) => ymd(new Date(kindOf(type) === 'sleep' ? startMs + secs * 1000 : startMs)); // sleep counts on the day you wake up
-  const PRIOS = {
-    high: { label: 'High', color: '#e11d48', bg: '#fff1f2' },
-    medium: { label: 'Medium', color: '#d97706', bg: '#fffbeb' },
-    low: { label: 'Low', color: '#059669', bg: '#ecfdf5' }
-  };
-  const prioPill = () => '';
   const typeDot = (t) => `<span class="tdot" style="background:${cat(t).color}"></span>`;
   const defaultLabel = (type) => { const k = kindOf(type); return k === 'break' ? 'Break' : k === 'sleep' ? 'Sleep' : k === 'study' ? 'Study session' : type === 'other' ? 'Activity' : cat(type).name; };
 
@@ -1280,7 +1274,7 @@
         ${org ? `<input type="checkbox" class="org-ck" data-action="org-pick" data-id="${t.id}" ${sel.has(t.id) ? 'checked' : ''} aria-label="Select ${esc(t.name)}">` : ''}
         <div class="grow"><div class="nm">${typeDot(t.type)}${esc(t.name)}</div>
           <div class="meta">${esc(cat(t.type).name)} · ${short(topicTotal(t.name))} logged in total</div></div>
-        ${prioPill(t.priority)}
+
         ${subs.length && !org ? `<select class="subj-sel" data-change="topic-subject" data-id="${t.id}" aria-label="Subject">${opts(subIds.has(t.subjectId) ? t.subjectId : '')}</select>` : ''}
         ${org ? '' : `<button class="btn sm" data-action="topic-edit" data-id="${t.id}">Edit</button>
         <button class="btn sm danger" data-action="topic-del" data-id="${t.id}">Delete</button>`}
@@ -1383,7 +1377,7 @@
           <div class="what">${esc(label)}</div>
           <div class="badges">
             <span class="pill" style="background:#eff6ff;color:${cat(t.type).color}">${esc(cat(t.type).name)}</span>
-            ${prioPill(t.priority)}
+
             ${t.blockId ? '<span class="pill" style="background:#eff6ff;color:#1d4ed8">From timetable</span>' : ''}
           </div>
           <div class="tstage ${t.startedAt || !isStudyTimer(t) ? 'run' : 'pz'} ${anim ? 'go-' + anim : ''}">
@@ -1456,7 +1450,7 @@
   function startCardHtml() {
     const f = ui.form, fk = kindOf(f.type), topics = live(data.topics).filter((x) => x.type === f.type), presets = live(data.presets), [h, sub] = stTitle(fk);
     return `
-      <div id="startcard" class="startcard ${fk === 'break' || fk === 'sleep' ? 'no-imp' : ''} ${f.mode === 'countdown' ? 'cd' : ''}">
+      <div id="startcard" class="startcard ${f.mode === 'countdown' ? 'cd' : ''}">
         <div class="st-glow"></div>
         <h2 id="st-title">${h}</h2><div class="note" id="st-sub">${sub}</div>
         <div class="st-bar"><span class="st-s">${stIcon('search', 22)}</span>
@@ -1484,9 +1478,7 @@
     const root = $('#startcard'); if (!root) { render(); return; }
     const f = ui.form, fk = kindOf(f.type), [h, sub] = stTitle(fk);
     $$('.st-tile', root).forEach((b) => b.classList.toggle('on', b.dataset.v === f.type));
-    $$('.st-prios button', root).forEach((b) => b.classList.toggle('on', b.dataset.v === f.priority));
     $$('.st-modes .seg button', root).forEach((b) => b.classList.toggle('on', b.dataset.v === f.mode));
-    root.classList.toggle('no-imp', fk === 'break' || fk === 'sleep');
     root.classList.toggle('cd', f.mode === 'countdown');
     $('#st-title', root).textContent = h; $('#st-sub', root).textContent = sub;
     const inp = $('#f-topic', root); inp.placeholder = stPlaceholder(fk); if (inp.value !== f.topic) inp.value = f.topic;
@@ -1788,15 +1780,6 @@
         <div class="bar"><i style="width:${e.sec / max * 100}%"></i></div>
         <div class="val">${short(e.sec)}</div></div>`).join('');
   }
-  function prioBreakdown(list) {
-    const t = { high: 0, medium: 0, low: 0 };
-    list.filter(isWork).forEach((s) => { t[s.priority] += s.seconds; });
-    const max = Math.max(...Object.values(t), 1);
-    return Object.entries(PRIOS).map(([k, v]) => `
-      <div class="hrow"><div class="nm">${prioPill(k)}</div>
-        <div class="bar"><i style="width:${t[k] / max * 100}%;background:${v.color}"></i></div>
-        <div class="val">${short(t[k])}</div></div>`).join('');
-  }
   function splitBar(tot) {
     const ks = ['study', 'break', 'neutral'], sum = ks.reduce((n, k) => n + tot[k], 0);
     if (!sum) return '<div class="note">Nothing logged in this range.</div>';
@@ -1825,11 +1808,11 @@
             ${presets.length ? presets.map((p) => `
               <div class="list-row">
                 <div class="grow"><div class="nm">${typeDot(p.type)}${esc(p.name)}</div>
-                  <div class="meta">${prioPill(p.priority)} ${p.minutes ? p.minutes + ' min' : 'Stopwatch'}${p.topic ? ' · ' + esc(p.topic) : ''}</div></div>
+                  <div class="meta">${p.minutes ? p.minutes + ' min' : 'Stopwatch'}${p.topic ? ' · ' + esc(p.topic) : ''}</div></div>
                 <button class="btn sm primary" data-action="preset-start" data-id="${p.id}">Start</button>
                 <button class="btn sm" data-action="preset-edit" data-id="${p.id}">Edit</button>
                 <button class="btn sm danger" data-action="preset-del" data-id="${p.id}">Delete</button>
-              </div>`).join('') : '<div class="empty"><b>No presets</b>A preset remembers a topic, importance and duration.</div>'}
+              </div>`).join('') : '<div class="empty"><b>No presets</b>A preset remembers a topic and a duration.</div>'}
           </div>
           ${syncCard()}
           ${installCard()}
@@ -2025,7 +2008,7 @@
           <div class="btime">${b.start} – ${b.end}<small>${fmtDur(dur)}</small></div>
           <div class="bmain">
             <div class="btopic">${typeDot(b.type)}${esc(b.topic || defaultLabel(b.type))}</div>
-            <div class="bmeta">${prioPill(b.priority)} ${spill(st)} <span>Planned ${fmtDur(dur)}${st.act ? ' · Did ' + short(st.act) : ''}</span></div>
+            <div class="bmeta">${spill(st)} <span>Planned ${fmtDur(dur)}${st.act ? ' · Did ' + short(st.act) : ''}</span></div>
             ${b.note ? `<div class="note" style="margin-top:4px">${esc(b.note)}</div>` : ''}
           </div>
           <div class="bact">
@@ -2068,7 +2051,7 @@
             <div class="row" style="margin-top:10px">
               <button class="btn primary" data-action="tt-quick-add">Add</button>
               <button class="btn" data-action="tt-add">Add with form</button>
-              <span class="note">Start a line with a category name, like <b>break:</b> or <b>sleep:</b>; add <b>!high</b> or <b>!low</b> for importance.</span>
+              <span class="note">Start a line with a category name, like <b>break:</b> or <b>sleep:</b>.</span>
             </div>
           </div>
           <div class="card">
@@ -2149,7 +2132,7 @@
     const todo = items.filter((i) => !i.done && !plannedOf(i.text) && !studied(i.text));
     const recent = recentBlocks(date);
     const row = (i) => {
-      const pb = plannedOf(i.text), sd = studied(i.text), p = PRIOS[i.prio || 'medium'];
+      const pb = plannedOf(i.text), sd = studied(i.text);
       return `<li class="${i.done || sd ? 'done' : ''}">
         <input type="checkbox" data-change="imp-done" data-id="${i.id}" ${i.done ? 'checked' : ''} aria-label="Covered">
         <input class="imp-item" data-bind="imp-item" data-id="${i.id}" value="${esc(i.text)}" aria-label="Topic">
@@ -2200,7 +2183,7 @@
     const list = missedBlocks(), open = ui.ms.open, shown = ui.ms.all ? list : list.slice(0, 15);
     const row = (m, i) => `<li>
       <div class="ms-when"><b>${fmtShort(m.date)}</b><span>${parseYmd(m.date).toLocaleDateString('en-IN', { weekday: 'short' })}</span></div>
-      <div class="ms-main"><span class="dot" style="background:${cat(m.b.type).color}"></span><span class="ms-nm">${esc(m.b.topic)}</span> <small>${m.b.start}–${m.b.end} · ${fmtDur(blockDur(m.b))}</small> ${prioPill(m.b.priority || 'medium')}</div>
+      <div class="ms-main"><span class="dot" style="background:${cat(m.b.type).color}"></span><span class="ms-nm">${esc(m.b.topic)}</span> <small>${m.b.start}–${m.b.end} · ${fmtDur(blockDur(m.b))}</small></div>
       <span class="ib-add"><button class="btn sm primary" data-action="ms-add" data-k="${esc(m.key)}">+ Timeline</button><button class="imp-x" data-action="ms-hide" data-k="${esc(m.key)}" aria-label="Remove from list" title="Remove from list">×</button></span>
     </li>`;
     return `<div class="card ms">
@@ -2409,7 +2392,7 @@
       <div class="blk" style="padding:0">
         <div class="btime">${b.start} – ${b.end}<small>${fmtDur(dur)}</small></div>
         <div class="bmain"><div class="btopic">${typeDot(b.type)}${esc(b.topic || defaultLabel(b.type))}</div>
-          <div class="bmeta">${prioPill(b.priority)} ${spill(it.st)}</div></div>
+          <div class="bmeta">${spill(it.st)}</div></div>
         <div class="bact"><button class="btn sm primary" data-action="tt-start" data-date="${pd}" data-id="${b.id}">${it.st.act ? 'Resume' : 'Start'}</button></div>
       </div></div>`;
   }
@@ -3238,7 +3221,6 @@
       if (kindOf(ui.form.type) === 'break' || kindOf(ui.form.type) === 'sleep') { ui.form.priority = 'low'; }
       syncStartCard();
     },
-    'set-prio': (el) => { ui.form.priority = el.dataset.v; syncStartCard(); },
     'set-mode': (el) => { ui.form.mode = el.dataset.v; if (ui.form.mode === 'countdown' && !(ui.form.minutes > 0)) ui.form.minutes = 25; syncStartCard(); },
     'f-min-step': (el) => { ui.form.minutes = Math.min(600, Math.max(1, (parseInt(ui.form.minutes, 10) || 25) + (+el.dataset.v))); syncStartCard(); },
     'use-topic': (el) => {
@@ -3515,7 +3497,6 @@
       ui.lib.sel = []; persist(true); render(); toast(`Moved ${n} ${n === 1 ? 'topic' : 'topics'}`);
     },
     'ib-toggle': () => { ui.ib.open = !ui.ib.open; try { localStorage.setItem('st-ib-open', ui.ib.open ? '1' : '0'); } catch (e) { /* ignore */ } render(); },
-    'ib-prio': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { const order = ['high', 'medium', 'low'], k = order.indexOf(it.prio || 'medium'); it.prio = order[(k + 1) % 3]; touch(it); persist(true); render(); } },
     'ib-add': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) addBlock(ttDate(), { topic: it.text, priority: it.prio || 'medium' }); },
     'ib-more': (el) => {
       const it = data.important.items.find((x) => x.id === el.dataset.id); if (!it) return;
