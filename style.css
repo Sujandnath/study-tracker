@@ -741,3 +741,7 @@ input[type=color] { width: 100%; height: 42px; padding: 3px; border: 1px solid v
 .gl.done .gl-note { color: #15803d; }
 
 .st-row { grid-template-columns: 1fr; }
+/* scroll lock while a study timer is running */
+html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hidden !important; overscroll-behavior: none; }
+
+.pill.rnd { background: #eff6ff; color: #1d4ed8; font-variant-numeric: tabular-nums; }

@@ -493,7 +493,8 @@
       id: uid(), topic, type: spec.type, priority: spec.priority,
       mode: spec.mode, targetSec: spec.mode === 'countdown' ? Math.round(spec.minutes * 60) : 0,
       accumulatedMs: 0, startedAt: Date.now(), startWall: Date.now(), comment: '', alerted: false,
-      blockId: spec.blockId || null, planDate: spec.planDate || null, planSec: spec.mode === 'stopwatch' ? Math.round(spec.planSec || 0) : 0
+      blockId: spec.blockId || null, planDate: spec.planDate || null, planSec: spec.mode === 'stopwatch' ? Math.round(spec.planSec || 0) : 0,
+      roundBreak: !!spec.roundBreak
     };
     data.timerUpdatedAt = Date.now();
     persist(true);
@@ -581,7 +582,11 @@
       ensureTopic(t.topic, t.type, t.priority);
       ui.date = sessionDate(t.type, t.startWall, secs);
       if (!quiet) toast(`Saved ${short(secs)} of ${name}`, restore);
-      const after = () => { if (!quiet && secs >= 60 && kindOf(t.type) === 'study' && (data.settings.askFocus !== false || prec)) setTimeout(() => finishCard(sid, prec && prec.id, restore), 0); };
+      const after = () => {
+        const stu = kindOf(t.type) === 'study';
+        if (!quiet && secs >= 60 && stu && (data.settings.askFocus !== false || prec)) setTimeout(() => finishCard(sid, prec && prec.id, restore), 0);
+        else if (!quiet && stu) setTimeout(() => { if (!data.timer && !$('#modal-root').innerHTML && roundNow().acc >= ROUND_SEC) roundDialog(null); }, 0);
+      };
       if (ask) setTimeout(() => completePrompt(ask.date, ask.b, ask.total, ask.dur, after), 0); else after();
     } else if (save) {
       toast('Too short to save (under 1 second)');
@@ -607,7 +612,7 @@
       </div>
       ${pr ? `<div class="fc-why"><span class="note">Last pause (${short(pr.seconds)}): what pulled you away?</span><div class="pask-c">${PAUSE_REASONS.map(([k, e, l]) => `<button class="${pr.reason === k ? 'on' : ''}" data-action="pause-reason" data-id="${pr.id}" data-v="${k}"><i>${e}</i>${l}</button>`).join('')}</div></div>` : ''}
       ${rate ? `<p class="note" style="margin:14px 0 8px">How focused were you?</p><div class="rate big">${[1, 2, 3, 4, 5].map((k) => `<button data-action="set-focus" data-id="${sid}" data-v="${k}"><b>${k}</b><span>${FOCUS_WORDS[k - 1]}</span></button>`).join('')}</div>` : ''}`,
-      [{ label: 'Stopped by mistake? Resume', fn: restore }, { label: rate ? 'Skip' : 'Done', cls: rate ? '' : 'primary' }]);
+      [{ label: 'Stopped by mistake? Resume', fn: restore }, ...(!data.timer && roundNow().acc >= ROUND_SEC ? [{ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak }] : []), { label: rate ? 'Skip' : 'Done', cls: rate ? '' : 'primary' }]);
     requestAnimationFrame(() => requestAnimationFrame(() => { const fg = $('#fc-fg'); if (fg) fg.style.strokeDashoffset = (C * (1 - score / 100)).toFixed(1); }));
   }
   function ensureTopic(name, type, priority) {
@@ -703,6 +708,8 @@
       const bar = $('#tbar');
       if (bar) bar.style.width = (t.mode === 'countdown' ? Math.min(100, el / t.targetSec * 100) : t.planSec > 0 ? Math.min(100, el / t.planSec * 100) : 0) + '%';
     }
+    { const rb = $('#rnd'); if (rb) rb.textContent = rndText(); }
+    roundWatch(t, el);
     document.title = paused ? `⏸ ${pmm(ps)} paused · ${t.topic || defaultLabel(t.type)}` : `${hms(shown)} · ${t.topic || defaultLabel(t.type)}`;
   }
 
@@ -1379,6 +1386,7 @@
             <span class="pill" style="background:#eff6ff;color:${cat(t.type).color}">${esc(cat(t.type).name)}</span>
 
             ${t.blockId ? '<span class="pill" style="background:#eff6ff;color:#1d4ed8">From timetable</span>' : ''}
+            ${isStudyTimer(t) ? `<span class="pill rnd" id="rnd">${rndText()}</span>` : ''}
           </div>
           <div class="tstage ${t.startedAt || !isStudyTimer(t) ? 'run' : 'pz'} ${anim ? 'go-' + anim : ''}">
             <div class="face main-f">
@@ -2484,10 +2492,10 @@
   //  timetable, check-ins, journal, sleep). Only rewards, redeemed items and
   //  the point settings are stored.
   // =====================================================================
-  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, subjDay: 30, subjMin: 20, missSubject: 5, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
+  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, roundBase: 10, roundStep: 5, roundCap: 40, subjDay: 30, subjMin: 20, missSubject: 5, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
   const PT_LABELS = [
     ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['meditate30', 'Meditation, per 30 minutes (paid per minute)'], ['meditateMax', 'Meditation: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
-    ['blockM', 'Study block done'], ['subjDay', 'Every subject studied today: reward'], ['subjMin', 'Minutes of study per subject to count today'], ['missSubject', 'Subject skipped today: penalty each'],
+    ['blockM', 'Study block done'], ['roundBase', 'Focus round 2 reward (1h of study, then a break and back in 15 min)'], ['roundStep', 'Focus rounds: extra for each round after'], ['roundCap', 'Focus rounds: maximum reward'], ['subjDay', 'Every subject studied today: reward'], ['subjMin', 'Minutes of study per subject to count today'], ['missSubject', 'Subject skipped today: penalty each'],
     ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
     ['missGoal', 'Missed goal: maximum penalty'], ['missBlock', 'Missed study block'], ['cap', 'Daily penalty cap'],
@@ -2667,6 +2675,7 @@
         });
         if (subs.every((s) => covered.has(s.id))) add('Every subject studied this week', v.allSubjects, 'earn');
       }
+      if (v.roundBase > 0) roundsOf(list, isToday ? tm : null).events.forEach((e) => add(`Focus round ${e.k} done`, e.pts, 'earn'));
       let subMiss = [];
       if (subs.length >= 2 && d >= (cfg.subjFrom || start) && (v.subjDay > 0 || v.missSubject > 0)) {
         const ss = new Map(subs.map((x) => [x.id, 0]));
@@ -2841,7 +2850,7 @@
   const itemKey = (l) => /^Study \d|^Study$/.test(l) ? 'Study time' : /^Workout/.test(l) ? 'Workout' : /^Meditation/.test(l) ? 'Meditation' : /^Daily goal/.test(l) ? 'Daily goal' : /^Stretch/.test(l) ? 'Stretch goal'
     : /study blocks? done/.test(l) ? 'Study blocks done' : /focused/.test(l) ? 'Focused sessions' : /^Evening check-in/.test(l) ? 'Evening check-in' : /^Journal/.test(l) ? 'Journal' : /^Sleep/.test(l) ? 'Sleep logged'
     : /-day streak/.test(l) ? 'Streak bonuses' : /^Every subject/.test(l) ? 'All subjects studied' : /^Planned the day/.test(l) ? 'Planned early' : /^Missed daily goal/.test(l) ? 'Missed daily goal'
-    : /missed blocks?/.test(l) ? 'Missed study blocks' : /penalty cap/.test(l) ? 'Daily penalty cap' : l;
+    : /^Focus round/.test(l) ? 'Focus rounds' : /missed blocks?/.test(l) ? 'Missed study blocks' : /penalty cap/.test(l) ? 'Daily penalty cap' : l;
   function rwRange(today) {
     const r = ui.rw, m = r.mode, anchor = r.date && r.date <= today ? r.date : today;
     if (m === 'week') { const s = weekStart(anchor); return { from: s, to: addDays(s, 6) < today ? addDays(s, 6) : today }; }
@@ -2989,6 +2998,10 @@
     // 8. streak milestone
     { const cur = streak(), next = [3, 7, 30].find((m) => m > cur);
       if (next && v['streak' + next] > 0) push({ id: 'streak', name: `${next}-day streak`, pts: v['streak' + next], state: 'open', pct: cur / next * 100, note: `${cur} of ${next} days${cur + 1 === next ? ' · study today to get it' : ` · ${next - cur} more day${next - cur === 1 ? '' : 's'}`}`, dots: next <= 10 ? { on: cur, total: next } : null }); }
+    // 8a. focus rounds
+    if (v.roundBase > 0) { const rs = roundNow(), nx = roundPts(rs.k), got = rs.events.reduce((n, e) => n + e.pts, 0);
+      push({ id: 'rounds', name: 'Focus rounds', pts: nx, state: 'open', pct: Math.min(100, rs.acc / ROUND_SEC * 100),
+        note: `${rs.done ? `Round ${rs.k}: break due (10 min, back within 15)` : `Round ${rs.k} · ${short(rs.acc)} of 1h`}${nx ? ` · +${nx} when you return from the break` : ' · round 1 starts your chain'}${got ? ` · earned +${got} today` : ''}` }); }
     // 8b. every subject today
     { const subs = live(data.subjects).filter((s) => !s.noWeekly && live(data.topics).some((t) => t.subjectId === s.id));
       if (subs.length >= 2 && (v.subjDay > 0 || v.missSubject > 0)) {
@@ -3162,6 +3175,78 @@
   // =====================================================================
   // While a timer or stopwatch is running, everything except the timer card is blurred and cannot be used. Pausing unlocks it.
   const isStudyTimer = (t) => !!t && kindOf(t.type) === 'study';
+
+  // =====================================================================
+  //  FOCUS ROUNDS: 60 minutes of study (across all topics and blocks) is one round.
+  //  A break of 8+ minutes ends it. Coming back within 15 minutes of the break
+  //  earns a reward from round 2 on, growing with each round. Counted per day.
+  // =====================================================================
+  const ROUND_SEC = 3600, ROUND_BRK = 480, ROUND_RET = 900;
+  const roundPts = (k) => { const v = ptv(); return k >= 2 && v.roundBase > 0 ? Math.min(v.roundCap, v.roundBase + v.roundStep * (k - 2)) : 0; };
+  function roundsOf(sessList, tmLive) {
+    const it = sessList.filter((s) => kindOf(s.type) === 'study').map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000 }));
+    if (tmLive && kindOf(tmLive.type) === 'study') it.push({ st: tmLive.startWall, sec: Math.round(elapsedMs(tmLive) / 1000), en: Date.now() });
+    it.sort((a, b) => a.st - b.st);
+    let k = 1, acc = 0, last = null; const events = [];
+    it.forEach((x) => {
+      if (last !== null) {
+        const gap = (x.st - last) / 1000;
+        if (gap >= ROUND_BRK) {
+          if (acc >= ROUND_SEC) { if (gap <= ROUND_RET) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; } else k = 1; }
+          acc = 0;
+        }
+      }
+      acc += x.sec; last = x.en;
+    });
+    return { k, acc, events, done: acc >= ROUND_SEC };
+  }
+  const roundNow = () => { const t = todayStr(); return roundsOf(live(data.sessions).filter((s) => s.date === t), data.timer); };
+  const rndText = () => { const r = roundNow(); return r.done ? `Round ${r.k} · break due` : `Round ${r.k} · ${Math.floor(r.acc / 60)}/60 min`; };
+  function takeRoundBreak() {
+    if (data.timer) stopTimer(true, { quiet: true });
+    startTimer({ type: 'break', topic: 'Break', mode: 'countdown', minutes: 10, roundBreak: true });
+    render();
+  }
+  function roundDialog(t) {
+    const r = ui.round = ui.round || { snooze: 0, untilStop: null }, rs = roundNow(), nx = roundPts(rs.k);
+    r.snooze = Date.now() + 600000;
+    if (data.settings.sound !== false) ting();
+    const btns = [];
+    if (t) btns.push({ label: 'Keep going: finish this block first', fn: () => { r.untilStop = t.id; } });
+    btns.push({ label: 'Ask again in 10 min', fn: () => { r.snooze = Date.now() + 600000; } });
+    btns.push({ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak });
+    choiceModal(`${rs.k === 1 ? '1 hour' : 'Round ' + rs.k} of study done`, `
+      <p style="line-height:1.55;margin-bottom:8px">You have studied <b>${short(rs.acc)}</b> this round. Take a <b>10 minute break</b>?</p>
+      <p class="note">${nx ? `Come back within 15 minutes of the break to earn <b>+${nx}</b>.` : 'Round 1 starts your chain. Come back within 15 minutes of the break and each round after it earns a reward.'}</p>`, btns);
+  }
+  function nextStudyBlock() {
+    const d = activePlanDate(), plan = resolvePlan(d), now = Date.now();
+    const cand = sortBlocks(plan.blocks).filter((b) => kindOf(b.type) === 'study' && !plan.skipped.includes(b.id) && !(plan.completed || []).includes(b.id) && blockActual(d, b.id) < blockDur(b) * 60 * 0.9);
+    return { d, b: cand.find((b) => blockTimes(d, b).endMs > now) || cand[0] || null };
+  }
+  function backToStudy() {
+    if (data.timer) stopTimer(true, { quiet: true });
+    const nb = nextStudyBlock();
+    if (nb.b) { startFromBlock(nb.d, nb.b.id); return; }
+    const td = todayStr(), ls = live(data.sessions).filter((x) => x.date === td && kindOf(x.type) === 'study').sort((x, y) => y.start - x.start)[0];
+    startTimer({ type: ls ? ls.type : 'study', topic: ls ? ls.topic : '', mode: 'stopwatch', minutes: 0 });
+  }
+  function backDialog() {
+    const nb = nextStudyBlock();
+    choiceModal('Break over', `<p style="line-height:1.55">Back to studying to keep your round chain going?${nb.b ? `<br><span class="note">Next: ${esc(nb.b.topic)} (${nb.b.start}–${nb.b.end})</span>` : ''}</p>`,
+      [{ label: 'Not yet' }, { label: 'Back to studying', cls: 'primary', fn: backToStudy }]);
+  }
+  function roundWatch(t, el) {
+    if ($('#modal-root').innerHTML) return;
+    const r = ui.round = ui.round || { snooze: 0, untilStop: null };
+    if (isStudyTimer(t) && t.startedAt) {
+      if (Date.now() < r.snooze || r.untilStop === t.id) return;
+      if (roundNow().acc >= ROUND_SEC) roundDialog(t);
+    } else if (t.roundBreak && kindOf(t.type) === 'break' && t.mode === 'countdown' && t.startedAt && el >= t.targetSec && !t.backAsked) {
+      t.backAsked = true; persist(true); if (data.settings.sound !== false) ting(); backDialog();
+    }
+  }
+
   const lockKind = (t) => { const k = kindOf(t.type); return k === 'study' || (k !== 'break' && k !== 'sleep' && !!data.settings.lockOther); };
   const focusLocked = () => !!(data && data.timer && data.timer.startedAt && lockKind(data.timer));
   let lockApplied = false;
