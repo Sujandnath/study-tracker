@@ -2157,7 +2157,7 @@
          <ul class="imp-list">${items.map(row).join('')}</ul>
          ${items.length ? '' : '<p class="note imp-empty">Keep the topics you must not forget here, then add each to the timeline with one tap.</p>'}
          <div class="imp-add"><input id="imp-new" type="text" placeholder="Add a topic…" autocomplete="off"><button class="btn sm primary" data-action="imp-add">Add</button></div>
-         ${recent.length ? `<div class="ib-recent"><div class="lbl">Recent blocks <span class="note">tap to add to this day</span></div><div class="ib-chips">${recent.map((e, k) => `<button class="ib-chip" data-action="ib-recent" data-i="${k}" title="${e.start} · ${PRIOS[e.priority || 'medium'].label}"><span class="dot" style="background:${cat(e.type).color}"></span>${esc(e.topic)} <small>${fmtDur(e.minutes)}</small></button>`).join('')}</div></div>` : ''}
+         ${recent.length ? `<div class="ib-recent"><div class="lbl">Recent blocks <span class="note">tap to add to this day</span></div><div class="ib-chips">${recent.map((e, k) => `<button class="ib-chip" data-action="ib-recent" data-i="${k}" title="${e.start}"><span class="dot" style="background:${cat(e.type).color}"></span>${esc(e.topic)} <small>${fmtDur(e.minutes)}</small></button>`).join('')}</div></div>` : ''}
          <div class="imp-foot"><button class="linkbtn" data-action="imp-text">Edit as text / paste a list</button>${items.some((i) => i.done) ? '<button class="linkbtn" data-action="imp-clear">Remove ticked</button>' : ''}</div>`;
     return `<div class="card imp">
       <div class="imp-bar"><span></span></div>
