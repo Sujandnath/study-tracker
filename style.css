@@ -883,3 +883,9 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
 .rl-row b { font-variant-numeric: tabular-nums; }
 .rl-hist { margin-top: 8px; border-top: 1px solid #eef2f7; }
 .rl-hist > div { display: grid; grid-template-columns: 44px 58px 1fr; gap: 8px; font-size: 13px; padding: 6px 0; border-top: 1px solid #f8fafc; } .rl-hist i { font-style: normal; color: var(--muted); }
+
+/* ---- season rank ---- */
+.pt-sub { margin-top: 16px; padding-top: 14px; border-top: 1px solid #e7eefb; }
+.pt-sh { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; } .pt-sh b { font-size: 15px; } .pt-sh small { color: var(--muted); font-size: 12.5px; }
+.pt-sh .sn { font-size: 12px; font-weight: 800; padding: 3px 10px; border-radius: 999px; background: #e2e8f0; color: #475569; }
+.sn.s1 { background: #e5e7eb; color: #4b5563; } .sn.s2 { background: #fef3c7; color: #b45309; } .sn.s3 { background: #cffafe; color: #0e7490; } .sn.s4 { background: #ede9fe; color: #6d28d9; }

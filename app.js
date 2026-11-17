@@ -2168,8 +2168,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 44, APP_DATE = '17 Nov 2026';
+  const APP_VERSION = 45, APP_DATE = '17 Nov 2026';
   const CHANGELOG = [
+    [45, '17 Nov', 'New level ladder (10 levels, scaled to your pace) and a monthly season rank.'],
     [44, '17 Nov', 'Version number shown in Settings, and this Rules page.'],
     [43, '17 Nov', 'Emergency break (30 min, once per chain, keeps your chain) and Skip break.'],
     [42, '17 Nov', 'Summary shows the "fresh day" message when only sleep is logged.'],
@@ -2216,7 +2217,8 @@
         `Your pause budget is <b>${st.pauseBudget || 0} minutes per hour</b> of session (0 means off), and you get a reminder when a single pause lasts <b>${st.longPause || 0} minutes</b>.`])}
       ${sec('Rewards and prices', [
         `Points buy rewards. You can borrow up to <b>${v.loanMax.toLocaleString('en-IN')}</b> points: a <b>${v.loanFee}%</b> fee is added once and the debt never grows after that.`,
-        `Levels: ${LEVELS.map(([n, p]) => `${n} (${p})`).join(', ')}.`,
+        `<b>Levels</b> come from your lifetime points and never go down: ${LEVELS.map(([n, p]) => `${n} (${p.toLocaleString('en-IN')})`).join(', ')}.`,
+        `<b>Season rank:</b> points earned in the calendar month: ${SEASONS.map(([n, p]) => `${n} (${p.toLocaleString('en-IN')})`).join(', ')}. It starts again on the 1st; your last 3 months are shown.`,
         `You can lock all points and prices for ${LOCK_DAYS} days so one bad day cannot change the rules.`])}
       <details class="rl-all"><summary>Every point value and price</summary>${rows}</details>
       <div class="rl-hist"><h3>What changed</h3>${CHANGELOG.map(([n, d, t]) => `<div><b>v${n}</b><i>${esc(d)}</i><span>${esc(t)}</span></div>`).join('')}</div>`;
@@ -2944,7 +2946,24 @@
     ['mock', 'Mock test taken (topic has "mock" or "test", 30+ min)'], ['mockBeat', 'Mock score beats your last one (write it in the topic, e.g. "Mock 3 - 72%")'],
     ['discPct', 'Goal discount reward: percent off']
   ];
-  const LEVELS = [['Beginner', 0], ['Learner', 200], ['Focused', 600], ['Scholar', 1500], ['Master', 3500], ['Legend', 8000]];
+  const LEVELS = [['Beginner', 0], ['Learner', 1000], ['Apprentice', 3000], ['Focused', 6000], ['Scholar', 12000], ['Adept', 20000], ['Expert', 32000], ['Master', 50000], ['Grandmaster', 75000], ['Legend', 100000]];
+  // monthly season rank: points earned in the calendar month. It starts again on the 1st; your level never drops.
+  const SEASONS = [['Bronze', 0], ['Silver', 2500], ['Gold', 5000], ['Platinum', 8000], ['Diamond', 11000]];
+  const seasonRank = (p) => { let i = 0; SEASONS.forEach(([, m], k) => { if (p >= m) i = k; }); return i; };
+  function seasonInfo(pts) {
+    const today = todayStr(), ym = today.slice(0, 7), months = {};
+    Object.keys(pts.days).forEach((d) => { const x = pts.days[d]; if (x) months[d.slice(0, 7)] = (months[d.slice(0, 7)] || 0) + x.total; });
+    const cur = months[ym] || 0, i = seasonRank(cur), nx = SEASONS[i + 1] || null, dim = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate();
+    const past = Object.keys(months).filter((k) => k < ym).sort().slice(-3).map((k) => ({ m: parseYmd(k + '-01').toLocaleDateString('en-IN', { month: 'short' }), p: months[k], r: SEASONS[seasonRank(months[k])][0] }));
+    return { cur, i, name: SEASONS[i][0], next: nx, left: dim - parseInt(today.slice(8), 10), past, pct: nx ? Math.max(0, (cur - SEASONS[i][1]) / (nx[1] - SEASONS[i][1]) * 100) : 100 };
+  }
+  function levelExtras(pts) {
+    const se = seasonInfo(pts);
+    const season = `<div class="pt-sub"><div class="pt-sh"><b>This month</b><span class="sn s${se.i}">${se.name}</span><small>${se.cur.toLocaleString('en-IN')} points · resets in ${se.left} ${se.left === 1 ? 'day' : 'days'}</small></div>
+      <div class="bar"><i style="width:${se.pct}%"></i></div>
+      <div class="note">${se.next ? `${(se.next[1] - se.cur).toLocaleString('en-IN')} points to ${se.next[0]} this month` : 'Top rank this month'}${se.past.length ? ' · Before: ' + se.past.map((x) => `${x.m} ${x.r}`).join(', ') : ''}</div></div>`;
+    return season;
+  }
   const ptv = () => Object.assign({}, PT_DEFAULTS, data.pointsCfg.v);
   const LOCK_DAYS = 7;
   const ptLocked = () => (data.pointsCfg.lockUntil || 0) > Date.now();
@@ -3505,7 +3524,8 @@
           <div class="lvname"><span class="lbl">Level</span><b>${lv.name}</b></div>
           <div class="bar"><i style="width:${lv.pct}%"></i></div>
           <div class="note">${lv.next ? `${(lv.next[1] - pts.L).toLocaleString('en-IN')} points to ${lv.next[0]}` : 'Top level reached'}</div>
-          <div class="lv-chips">${LEVELS.map(([n, m], i) => `<span class="${i === lv.idx ? 'on' : i < lv.idx ? 'past' : ''}" title="${m} points">${n}</span>`).join('')}</div>
+          <div class="lv-chips">${LEVELS.map(([n, m], i) => `<span class="${i === lv.idx ? 'on' : i < lv.idx ? 'past' : ''}" title="${m.toLocaleString('en-IN')} points">${n}</span>`).join('')}</div>
+          ${levelExtras(pts)}
         </div>
       </div>`;
 
