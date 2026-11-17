@@ -807,3 +807,62 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
 .sm-tabs { flex-wrap: nowrap; } .sm-tabs button { flex: none; }
 
 .lnk { color: var(--blue); text-decoration: underline; word-break: break-all; } .lnk:hover { text-decoration: none; }
+.sm-c > div { min-width: 0; flex: 1; }
+.sm-c span:not(.sm-ic) { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+
+.sm-c span.mt { -webkit-line-clamp: 1; font-size: 12px; opacity: .85; }
+.sm-c span.nm { -webkit-line-clamp: 2; color: var(--ink); font-weight: 500; }
+.sm-c span.mt { -webkit-line-clamp: 2; }
+
+.sm-none { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; padding: 22px 12px 18px; margin-bottom: 4px; border: 1.5px dashed #dbe4f3; border-radius: 16px; background: linear-gradient(180deg, #f8fbff, #fff); }
+.sm-none-i { font-size: 30px; line-height: 1; margin-bottom: 4px; }
+.sm-none b { font-size: 16px; }
+.sm-none span { font-size: 13px; color: var(--muted); max-width: 300px; }
+
+/* ---- Progress page ---- */
+.pg-hero .pg-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.pg-verdict { font-size: 13px; font-weight: 700; padding: 7px 12px; border-radius: 999px; background: #f1f5f9; color: #475569; }
+.pg-verdict.up { background: #dcfce7; color: #15803d; } .pg-verdict.down { background: #fee2e2; color: #b91c1c; }
+.pg-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.pg-stats > div { background: #f8fafc; border-radius: 14px; padding: 12px 14px; min-width: 0; }
+.pg-stats b { display: block; font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.pg-stats b small { font-size: 13px; font-weight: 600; color: var(--muted); }
+.pg-stats span { font-size: 12px; color: var(--muted); }
+.pg-dots { display: flex; gap: 4px; margin-top: 14px; }
+.pg-dots i, .pg-key i { flex: 1; height: 12px; border-radius: 4px; background: #e8edf5; }
+.pg-dots i.h, .pg-key i.h { background: #16a34a; } .pg-dots i.p, .pg-key i.p { background: #93c5fd; }
+.pg-dots i.f { background: #f8fafc; border: 1px dashed #dbe4f3; } .pg-dots i.r, .pg-key i.r { background: #fff; border: 1.5px dashed #a5b4fc; }
+.pg-key { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.pg-key span { display: inline-flex; align-items: center; gap: 6px; } .pg-key i { flex: none; width: 12px; height: 12px; }
+.pg-sub { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 8px; }
+.pg-srh, .pg-sr { display: grid; grid-template-columns: minmax(90px, 1.3fr) 1.4fr 72px 72px 92px; gap: 10px; align-items: center; }
+.pg-srh { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding-bottom: 6px; }
+.pg-srh span:nth-child(n+3), .pg-sr .val, .pg-sr .pg-dl { text-align: right; }
+.pg-sr { padding: 8px 0; border-top: 1px solid #eef2f7; font-size: 13.5px; }
+.pg-sr .nm { display: flex; align-items: center; gap: 8px; min-width: 0; } .pg-sr .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.pg-sr .bar { height: 10px; background: #eef2f7; border-radius: 6px; overflow: hidden; } .pg-sr .bar i { display: block; height: 100%; border-radius: 6px; }
+.pg-sr .val { font-weight: 700; font-variant-numeric: tabular-nums; } .pg-sr .val small { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+.pg-sr .pg-dl { font-size: 12.5px; font-weight: 600; color: var(--muted); } .pg-sr .pg-dl.up { color: #15803d; } .pg-sr .pg-dl.down { color: #b91c1c; }
+.pg-sr .pg-ag { text-align: right; } .pg-ago { font-style: normal; font-size: 12px; font-weight: 600; color: var(--muted); } .pg-ago.bad { color: #b45309; } .pg-ago.ok { color: #15803d; }
+.pg-fd { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; align-items: end; text-align: center; }
+.pg-fb { display: flex; align-items: flex-end; height: 70px; background: #f1f5f9; border-radius: 10px; overflow: hidden; } .pg-fb i { display: block; width: 100%; background: #2563eb; border-radius: 8px 8px 0 0; }
+.pg-fd b { display: block; margin-top: 6px; font-size: 15px; } .pg-fd small { font-size: 11px; color: var(--muted); }
+.pg-wk > div { display: grid; grid-template-columns: 70px 1.6fr 1fr 1fr; gap: 8px; align-items: center; padding: 7px 0; border-top: 1px solid #eef2f7; font-size: 13px; font-variant-numeric: tabular-nums; }
+.pg-wk > div.h { border-top: 0; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding-top: 0; }
+.pg-mini { display: inline-block; width: 60%; max-width: 90px; height: 8px; background: #eef2f7; border-radius: 5px; vertical-align: middle; margin-right: 8px; overflow: hidden; } .pg-mini s { display: block; height: 100%; background: #2563eb; border-radius: 5px; }
+.pg-grid { overflow-x: auto; } .pg-grid svg { min-width: 460px; width: 100%; display: block; }
+.pg-rec { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.pg-rec > div { background: #f8fafc; border-radius: 14px; padding: 12px 14px; min-width: 0; }
+.pg-rec span { display: block; font-size: 12px; color: var(--muted); } .pg-rec b { display: block; font-size: 20px; font-weight: 800; margin: 2px 0; } .pg-rec small { font-size: 12px; color: var(--muted); }
+.pg-new { font-style: normal; font-size: 10.5px; font-weight: 700; background: #dcfce7; color: #15803d; padding: 2px 7px; border-radius: 999px; margin-left: 4px; }
+.pz-n b small { font-size: 12px; font-weight: 600; color: var(--muted); }
+@media (max-width: 640px) {
+  .pg-stats, .pg-rec { grid-template-columns: repeat(2, 1fr); }
+  .pg-srh { display: none; }
+  .pg-sr { grid-template-columns: 1fr auto; row-gap: 6px; } .pg-sr .bar { grid-column: 1 / -1; order: 3; } .pg-sr .pg-dl { display: none; } .pg-sr .pg-ag { grid-column: 1 / -1; order: 4; text-align: left; margin-top: -2px; }
+  .pg-wk > div { grid-template-columns: 56px 1.5fr 1fr .8fr; }
+}
+
+.pz-card .pz-top { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.pg-grid svg { max-width: 640px; }
+.pg-fd > div { max-width: 90px; margin: 0 auto; width: 100%; }

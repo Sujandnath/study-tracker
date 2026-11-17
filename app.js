@@ -148,6 +148,7 @@
     if (!d.important || typeof d.important !== 'object' || Array.isArray(d.important)) d.important = {};
     if (!d.pointsCfg || typeof d.pointsCfg !== 'object' || Array.isArray(d.pointsCfg)) d.pointsCfg = { updatedAt: 0 };
     d.pointsCfg.subjFrom = d.pointsCfg.subjFrom || todayStr(); // the daily every-subject goal starts counting the day it is first opened
+    d.pointsCfg.blockFrom = d.pointsCfg.blockFrom || todayStr(); // blocks pay by length from the day this version is first opened
     d.pointsCfg.startDate = d.pointsCfg.startDate || todayStr(); // points start counting the day this version is first opened
     if (d.pointsCfg.penalties === undefined) d.pointsCfg.penalties = true;
     if (!d.pointsCfg.v || typeof d.pointsCfg.v !== 'object') d.pointsCfg.v = {};
@@ -592,6 +593,7 @@
         id: sid, date: sessionDate(t.type, t.startWall, secs), start: t.startWall, seconds: secs,
         topic: name, type: t.type, priority: t.priority, comment: (t.comment || '').trim(),
         pausedSec: t.pauseSec || 0, pauses: t.pauseN || 0,
+        ...(t.lastRound ? { lastRound: true } : {}),
         ...(t.blockId ? { blockId: t.blockId, planDate: t.planDate } : {})
       }));
       ensureTopic(t.topic, t.type, t.priority);
@@ -627,7 +629,7 @@
       </div>
       ${pr ? `<div class="fc-why"><span class="note">Last pause (${short(pr.seconds)}): what pulled you away?</span><div class="pask-c">${PAUSE_REASONS.map(([k, e, l]) => `<button class="${pr.reason === k ? 'on' : ''}" data-action="pause-reason" data-id="${pr.id}" data-v="${k}"><i>${e}</i>${l}</button>`).join('')}</div></div>` : ''}
       ${rate ? `<p class="note" style="margin:14px 0 8px">How focused were you?</p><div class="rate big">${[1, 2, 3, 4, 5].map((k) => `<button data-action="set-focus" data-id="${sid}" data-v="${k}"><b>${k}</b><span>${FOCUS_WORDS[k - 1]}</span></button>`).join('')}</div>` : ''}`,
-      [{ label: 'Stopped by mistake? Resume', fn: restore }, ...(!data.timer && roundNow().acc >= ROUND_SEC ? [{ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak }] : []), { label: rate ? 'Skip' : 'Done', cls: rate ? '' : 'primary' }]);
+      [{ label: 'Stopped by mistake? Resume', fn: restore }, ...(!data.timer && roundNow().acc >= ROUND_SEC ? [{ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak }] : []), ...(!data.timer && lastRoundOk() ? [{ label: 'Last round: end chain', fn: () => lastRoundModal(sid) }] : []), { label: rate ? 'Skip' : 'Done', cls: rate ? '' : 'primary' }]);
     requestAnimationFrame(() => requestAnimationFrame(() => { const fg = $('#fc-fg'); if (fg) fg.style.strokeDashoffset = (C * (1 - score / 100)).toFixed(1); }));
   }
   function ensureTopic(name, type, priority) {
@@ -1194,7 +1196,7 @@
   function sumCards(slices, total, withIcon) {
     return slices.map((x, i) => `<div class="sm-c ${i === 0 && slices.length % 2 === 1 ? 'wide' : ''}" style="--c:${x.color}">
         <span class="sm-ic">${withIcon && x.id ? stIcon(catIconKey(cat(x.id)), 18) : '<i></i>'}</span>
-        <div><b>${short(x.sec)}</b><span>${esc(x.name)} · ${total ? Math.round(x.sec / total * 100) : 0}%${x.n ? ` · ${x.n} ${x.n === 1 ? 'session' : 'sessions'}` : ''}</span></div></div>`).join('');
+        <div><b>${short(x.sec)}</b><span class="nm" title="${esc(x.name)}">${esc(x.name)}</span><span class="mt">${total ? Math.round(x.sec / total * 100) : 0}%${x.n ? ` · ${x.n} ${x.n === 1 ? 'session' : 'sessions'}` : ''}</span></div></div>`).join('');
   }
   function summaryCard(d) {
     const sm = ui.sum = ui.sum || { tab: 'type', period: 'day' };
@@ -1259,8 +1261,8 @@
       <h2>Summary <small>${sd.entries} ${sd.entries === 1 ? 'entry' : 'entries'}</small></h2>
       <div class="sm-ctl"><div class="seg sm-per">${[['day', 'Day'], ['week', 'Week'], ['month', 'Month']].map(([k, l]) => `<button class="${sm.period === k ? 'on' : ''}" data-action="sum-period" data-v="${k}">${l}</button>`).join('')}</div></div>
       <div class="seg sm-tabs">${SUM_TABS.map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-action="sum-tab" data-v="${k}">${l}</button>`).join('')}</div>
-      <div class="sm-hero"><div><div class="sm-big">${hero}</div><div class="sm-sub">${sub}</div></div>${badge}</div>
-      ${bar}${body}${goalStrip}
+      ${sd.entries ? `<div class="sm-hero"><div><div class="sm-big">${hero}</div><div class="sm-sub">${sub}</div></div>${badge}</div>
+      ${bar}${body}` : `<div class="sm-none"><div class="sm-none-i">${sm.period === 'day' ? (isToday ? '☀️' : '🗓️') : '📅'}</div><b>${sm.period === 'day' ? (isToday ? 'A fresh day' : 'Nothing logged') : 'Nothing logged yet'}</b><span>${isToday && sm.period === 'day' ? 'Start a timer or add an entry and your breakdown will appear here.' : 'No entries for this ' + sm.period + '.'}</span></div>`}${goalStrip}
       <div class="sm-foot"><span class="sm-chip lav">${sleepChip}</span>${sd.untracked ? `<span class="sm-chip">⏳ <b>${short(sd.untracked)}</b> untracked <small>gaps over ${fmtDur(gapCapMin())}</small></span>` : ''}${sm.period === 'day' ? '<button class="linkbtn" data-action="sleep-log">Log sleep</button>' : ''}</div>
       ${sm.period === 'day' ? restLine(d) : ''}
     </div>`;
@@ -1542,6 +1544,7 @@
           <input type="text" data-bind="run-comment" placeholder="Add a comment (optional)" value="${esc(t.comment)}">
           <div class="timer-extra">
             <button class="linkbtn" data-action="switch-topic">⇄ Switch topic</button>
+            ${isStudyTimer(t) && lastRoundOk() ? '<button class="linkbtn" data-action="last-round">🏁 Finish as my last round</button>' : ''}
             ${t.startedAt && !t.backed && elapsedMs(t) < 300000 ? '<span class="late"><span class="note">Started earlier?</span>' + [5, 10, 15].map((m) => `<button data-action="back-start" data-v="${m}">${m} min ago</button>`).join('') + '</span>' : ''}
           </div>
         </div>`;
@@ -1746,8 +1749,236 @@
   }
   const daysBetween = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / 86400000) + 1;
 
+  // =====================================================================
+  //  PROGRESS PAGE PIECES (hero, goal chart, trend, subject balance, pauses & focus, consistency, points, records)
+  // =====================================================================
+  const FOCUS_NAMES = ['Scattered', 'Distracted', 'Okay', 'Focused', 'Deep focus'];
+  const studyDayMap = () => { const m = {}; live(data.sessions).forEach((s) => { if (kindOf(s.type) === 'study') m[s.date] = (m[s.date] || 0) + s.seconds; }); return m; };
+  const sumDays = (m, from, n) => { let t = 0; for (let i = 0; i < n; i++) t += m[addDays(from, i)] || 0; return t; };
+  const dailyGoalSec = () => (data.settings.dailyGoalMin || 0) * 60;
+  const subjLookup = () => {
+    const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t])), smap = new Map(live(data.subjects).map((s) => [s.id, s]));
+    return (s) => { const t = tmap.get((s.topic || '').toLowerCase()), sub = t && t.subjectId ? smap.get(t.subjectId) : null; return sub ? { id: sub.id, name: sub.name, color: sub.color } : { id: '_none', name: 'No subject', color: '#cbd5e1' }; };
+  };
+
+  function progHero(r, m, nDays, elapsed) {
+    const goal = dailyGoalSec(), today = todayStr(), mode = ui.prog.mode, partial = elapsed < nDays;
+    const cur = sumDays(m, r.from, elapsed), prev = sumDays(m, addDays(r.from, -nDays), elapsed), dl = cur - prev;
+    const vs = mode === 'week' ? 'last week' : mode === 'month' ? 'last month' : 'the period before';
+    let cls = 'flat', verdict;
+    if (!cur && !prev) verdict = 'Nothing logged yet in this period';
+    else if (!prev) { cls = 'up'; verdict = `Nothing from ${vs} to compare with`; }
+    else { const pc = dl / prev * 100; cls = pc >= 10 ? 'up' : pc <= -10 ? 'down' : 'flat'; verdict = (pc >= 10 ? '▲ Stronger than ' : pc <= -10 ? '▼ Lighter than ' : '● About the same as ') + vs; }
+    let hit = 0, counted = 0, active = 0, best = null; const dots = [];
+    for (let i = 0; i < nDays; i++) {
+      const d = addDays(r.from, i), sec = m[d] || 0, rest = isRest(d), fut = d > today;
+      if (!fut && !rest) { counted++; if (goal && sec >= goal) hit++; }
+      if (sec > 0) { active++; if (!best || sec > best.sec) best = { d, sec }; }
+      dots.push(`<i class="${fut ? 'f' : rest ? 'r' : goal && sec >= goal ? 'h' : sec > 0 ? 'p' : ''}" title="${esc(fmtShort(d))}: ${fut ? 'upcoming' : rest ? 'rest day' : sec ? short(sec) : 'nothing'}"></i>`);
+    }
+    return `<div class="card pg-hero">
+      <div class="pg-top"><div><div class="sm-big">${cur ? short(cur) : '–'}</div><div class="sm-sub">studied ${partial ? 'so far' : 'in this period'}${prev ? ` · ${short(Math.abs(dl))} ${dl >= 0 ? 'more' : 'less'} than ${vs}${partial ? ' (same number of days)' : ''}` : ''}</div></div>
+        <span class="pg-verdict ${cls}">${verdict}</span></div>
+      <div class="pg-stats">
+        <div><b>${short(cur / Math.max(1, elapsed))}</b><span>daily average</span></div>
+        <div><b>${active}<small> / ${nDays}</small></b><span>days studied</span></div>
+        <div><b>${goal ? `${hit}<small> / ${counted}</small>` : '–'}</b><span>days goal reached</span></div>
+        <div><b>${best ? short(best.sec) : '–'}</b><span>${best ? 'best · ' + esc(fmtShort(best.d)) : 'best day'}</span></div>
+      </div>
+      ${nDays <= 31 ? `<div class="pg-dots" aria-label="Goal reached on green days">${dots.join('')}</div><div class="pg-key"><span><i class="h"></i>goal reached</span><span><i class="p"></i>some study</span><span><i></i>none</span><span><i class="r"></i>rest</span></div>` : ''}
+    </div>`;
+  }
+
+  // study hours per day (or per week for long ranges) with the daily goal drawn on it
+  function goalChart(r, m, nDays) {
+    const goal = dailyGoalSec(), today = todayStr(), weekly = nDays > 62, rest = data.settings.restPerWeek || 0, buckets = [];
+    if (!weekly) for (let i = 0; i < nDays; i++) { const d = addDays(r.from, i); buckets.push({ label: String(parseYmd(d).getDate()), tip: fmtShort(d), sec: m[d] || 0, goal, rest: isRest(d), fut: d > today }); }
+    else { let cur = r.from; while (cur <= r.to) { const end = addDays(cur, 6) > r.to ? r.to : addDays(cur, 6); let sec = 0; for (let d = cur; d <= end; d = addDays(d, 1)) sec += m[d] || 0; buckets.push({ label: fmtShort(cur), tip: `${fmtShort(cur)} – ${fmtShort(end)}`, sec, goal: goal * Math.max(1, Math.min(7, daysBetween(cur, end)) - (daysBetween(cur, end) >= 7 ? rest : 0)), rest: false, fut: cur > today }); cur = addDays(end, 1); } }
+    const narrow = window.innerWidth <= 760, W = narrow ? 400 : 820, H = narrow ? 230 : 250, L = narrow ? 40 : 46, R = 6, T = 12, B = 28, iw = W - L - R, ih = H - T - B;
+    const maxH = Math.max(1, ...buckets.map((b) => Math.max(b.sec, b.goal) / 3600)), top = Math.ceil(maxH * 1.04);
+    const slot = iw / buckets.length, bw = Math.min(36, Math.max(3, slot * .64)), y = (h) => T + ih - (h / top) * ih;
+    let g = '';
+    for (let i = 0; i <= 4; i++) { const v = top * i / 4, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${+v.toFixed(2)}h</text>`; }
+    const every = Math.ceil(buckets.length / (narrow ? 8 : 16));
+    buckets.forEach((b, i) => {
+      const x = L + slot * i + (slot - bw) / 2, h = b.sec / 3600, ok = b.goal && b.sec >= b.goal;
+      const tip = `${b.tip}: ${b.sec ? short(b.sec) : b.rest ? 'rest day' : 'nothing logged'}${b.goal ? ` · goal ${short(b.goal)}${ok ? ' ✓' : ''}` : ''}`;
+      if (h > 0) g += `<rect x="${x}" y="${y(h)}" width="${bw}" height="${Math.max(1, y(0) - y(h))}" rx="3" fill="${ok ? '#16a34a' : '#2563eb'}" opacity="${b.fut ? .35 : 1}"><title>${esc(tip)}</title></rect>`;
+      else g += `<rect x="${x}" y="${y(0) - 2}" width="${bw}" height="2" fill="${b.rest ? '#a5b4fc' : '#e2e8f0'}"><title>${esc(tip)}</title></rect>`;
+      if (weekly && b.goal) g += `<line x1="${x - 2}" x2="${x + bw + 2}" y1="${y(b.goal / 3600)}" y2="${y(b.goal / 3600)}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 3"/>`;
+      if (i % every === 0) g += `<text x="${x + bw / 2}" y="${H - 9}" text-anchor="middle" font-size="11" fill="#64748b">${esc(b.label)}</text>`;
+    });
+    if (!weekly && goal) g += `<line x1="${L}" x2="${W - R}" y1="${y(goal / 3600)}" y2="${y(goal / 3600)}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 4"/><text x="${W - R}" y="${y(goal / 3600) - 5}" text-anchor="end" font-size="11" font-weight="700" fill="#d97706">goal ${short(goal)}</text>`;
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Study per ${weekly ? 'week' : 'day'} against your goal">${g}</svg>`;
+  }
+
+  // the last 12 weeks of study, whatever range is selected above
+  function trendCard(m) {
+    const ws = weekStart(todayStr()), N = 12, rows = [];
+    for (let i = N - 1; i >= 0; i--) { const a = addDays(ws, -7 * i); rows.push({ a, sec: sumDays(m, a, 7), cur: i === 0 }); }
+    if (!rows.some((x) => x.sec)) return '';
+    const done = rows.filter((x) => !x.cur), avg = done.length ? done.reduce((n, x) => n + x.sec, 0) / done.length : 0;
+    const wkGoal = dailyGoalSec() * Math.max(1, 7 - (data.settings.restPerWeek || 0));
+    const last4 = done.slice(-4), prev4 = done.slice(-8, -4), a4 = last4.length ? last4.reduce((n, x) => n + x.sec, 0) / last4.length : 0, p4 = prev4.length ? prev4.reduce((n, x) => n + x.sec, 0) / prev4.length : 0;
+    const bestW = rows.reduce((b, x) => (x.sec > b.sec ? x : b), rows[0]);
+    const narrow = window.innerWidth <= 760, W = narrow ? 400 : 820, H = 210, L = narrow ? 40 : 46, R = 6, T = 20, B = 26, iw = W - L - R, ih = H - T - B;
+    const top = Math.ceil(Math.max(1, ...rows.map((x) => x.sec / 3600), wkGoal / 3600) * 1.08), y = (h) => T + ih - (h / top) * ih, slot = iw / N, bw = Math.min(40, slot * .66);
+    let g = '';
+    for (let i = 0; i <= 4; i++) { const v = top * i / 4, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${Math.round(v)}h</text>`; }
+    rows.forEach((x, i) => {
+      const xx = L + slot * i + (slot - bw) / 2, h = x.sec / 3600;
+      if (h > 0) g += `<rect x="${xx}" y="${y(h)}" width="${bw}" height="${Math.max(1, y(0) - y(h))}" rx="4" fill="#2563eb" opacity="${x.cur ? .45 : 1}"><title>${esc(fmtShort(x.a))}: ${short(x.sec)}${x.cur ? ' (this week so far)' : ''}</title></rect><text x="${xx + bw / 2}" y="${y(h) - 5}" text-anchor="middle" font-size="10.5" font-weight="700" fill="#334155">${+h.toFixed(1)}</text>`;
+      else g += `<rect x="${xx}" y="${y(0) - 2}" width="${bw}" height="2" fill="#e2e8f0"/>`;
+      if (i % (narrow ? 2 : 1) === 0 || i === N - 1) g += `<text x="${xx + bw / 2}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="#64748b">${esc(fmtShort(x.a))}</text>`;
+    });
+    if (wkGoal) g += `<line x1="${L}" x2="${W - R}" y1="${y(wkGoal / 3600)}" y2="${y(wkGoal / 3600)}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 4"/>`;
+    if (avg) g += `<line x1="${L}" x2="${W - R}" y1="${y(avg / 3600)}" y2="${y(avg / 3600)}" stroke="#16a34a" stroke-width="1.5" stroke-dasharray="2 4"/>`;
+    const dT = a4 - p4;
+    return `<div class="card"><h2>12-week trend <small>study hours per week</small></h2>
+      <div class="chart-wrap"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Study hours for each of the last 12 weeks">${g}</svg></div>
+      <div class="legend"><span><span class="tdot" style="background:#2563eb"></span>Week</span>${wkGoal ? '<span><span class="tdot" style="background:#f59e0b"></span>Weekly goal</span>' : ''}<span><span class="tdot" style="background:#16a34a"></span>Average ${short(avg)}</span></div>
+      <div class="sm-chips" style="margin-top:12px"><span>📊 Last 4 weeks <b>${short(a4)}</b> a week</span>${prev4.length ? `<span class="${dT >= 0 ? 'good' : 'bad'}">${dT >= 0 ? '▲' : '▼'} <b>${short(Math.abs(dT))}</b> ${dT >= 0 ? 'more' : 'less'} than the 4 before</span>` : ''}<span>🏆 Best week <b>${short(bestW.sec)}</b> <small>${esc(fmtShort(bestW.a))}</small></span></div></div>`;
+  }
+
+  function subjectBalanceCard(r, m, nDays, elapsed) {
+    const subjOf = subjLookup(), today = todayStr(), subs = live(data.subjects);
+    const study = live(data.sessions).filter((s) => kindOf(s.type) === 'study');
+    if (!study.length) return '';
+    const st = new Map(), get = (sj) => { let e = st.get(sj.id); if (!e) st.set(sj.id, e = { ...sj, sec: 0, prev: 0, days: new Set(), last: '', wk: {} }); return e; };
+    const pFrom = addDays(r.from, -nDays), pTo = addDays(pFrom, elapsed - 1), w0 = addDays(weekStart(today), -49);
+    study.forEach((s) => {
+      const e = get(subjOf(s));
+      if (s.date > e.last) e.last = s.date;
+      if (s.date >= r.from && s.date <= r.to) { e.sec += s.seconds; e.days.add(s.date); }
+      if (s.date >= pFrom && s.date <= pTo) e.prev += s.seconds;
+      if (s.date >= w0) { const w = weekStart(s.date); e.wk[w] = (e.wk[w] || 0) + s.seconds; }
+    });
+    subs.forEach((s) => { if (!s.noWeekly && live(data.topics).some((t) => t.subjectId === s.id)) get({ id: s.id, name: s.name, color: s.color }); });
+    const rows = [...st.values()].filter((e) => e.sec > 0 || e.prev > 0 || e.id !== '_none').sort((a, b) => (a.id === '_none') - (b.id === '_none') || b.sec - a.sec || b.last.localeCompare(a.last));
+    const total = rows.reduce((n, e) => n + e.sec, 0), max = Math.max(1, ...rows.map((e) => e.sec));
+    const ago = (e) => { if (!e.last) return '<em class="pg-ago bad">never studied</em>'; const n = daysBetween(e.last, today) - 1; return n <= 0 ? '<em class="pg-ago ok">today</em>' : `<em class="pg-ago ${n >= 3 ? 'bad' : ''}">${n} ${n === 1 ? 'day' : 'days'} ago</em>`; };
+    const list = rows.map((e) => { const d = e.sec - e.prev;
+      return `<div class="pg-sr"><div class="nm"><span class="tdot" style="background:${e.color}"></span><span class="t" title="${esc(e.name)}">${esc(e.name)}</span></div>
+        <div class="bar"><i style="width:${e.sec / max * 100}%;background:${e.color}"></i></div>
+        <div class="val">${e.sec ? short(e.sec) : '–'}<small>${total && e.sec ? Math.round(e.sec / total * 100) + '%' : ''}</small></div>
+        <div class="pg-dl ${d > 0 ? 'up' : d < 0 ? 'down' : ''}">${d === 0 ? '–' : (d > 0 ? '▲ ' : '▼ ') + short(Math.abs(d))}</div>
+        <div class="pg-ag">${ago(e)}</div></div>`; }).join('');
+    const stale = rows.filter((e) => e.id !== '_none' && (!e.last || daysBetween(e.last, today) - 1 >= 3) && !(subs.find((s) => s.id === e.id) || {}).noWeekly);
+    // 8 weeks, stacked by subject
+    const weeks = []; for (let i = 7; i >= 0; i--) weeks.push(addDays(weekStart(today), -7 * i));
+    const colTot = weeks.map((w) => rows.reduce((n, e) => n + (e.wk[w] || 0), 0));
+    let chart = '';
+    if (colTot.some(Boolean)) {
+      const narrow = window.innerWidth <= 760, W = narrow ? 400 : 820, H = 200, L = narrow ? 40 : 46, R = 6, T = 10, B = 26, iw = W - L - R, ih = H - T - B, top = Math.ceil(Math.max(1, ...colTot.map((x) => x / 3600)) * 1.05), y = (h) => T + ih - (h / top) * ih, slot = iw / weeks.length, bw = Math.min(46, slot * .66);
+      let g = '';
+      for (let i = 0; i <= 4; i++) { const v = top * i / 4, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${Math.round(v)}h</text>`; }
+      weeks.forEach((w, i) => { const xx = L + slot * i + (slot - bw) / 2; let acc = 0;
+        rows.forEach((e) => { const h = (e.wk[w] || 0) / 3600; if (h <= 0) return; g += `<rect x="${xx}" y="${y(acc + h)}" width="${bw}" height="${Math.max(1, y(acc) - y(acc + h))}" fill="${e.color}"><title>${esc(e.name)} · ${esc(fmtShort(w))}: ${short(e.wk[w])}</title></rect>`; acc += h; });
+        if (!acc) g += `<rect x="${xx}" y="${y(0) - 2}" width="${bw}" height="2" fill="#e2e8f0"/>`;
+        g += `<text x="${xx + bw / 2}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="#64748b">${esc(fmtShort(w))}</text>`; });
+      chart = `<div class="pg-sub">Last 8 weeks, by subject</div><div class="chart-wrap"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Weekly study split by subject">${g}</svg></div>`;
+    }
+    return `<div class="card"><h2>Subject balance <small>this range vs the one before</small></h2>
+      ${list ? `<div class="pg-srh"><span></span><span></span><span>Time</span><span>Change</span><span>Last studied</span></div>${list}` : ''}
+      ${stale.length ? `<div class="sm-miss" style="margin-top:12px"><span>Not studied for 3+ days</span>${stale.map((e) => `<b>${esc(e.name)}</b>`).join('')}</div>` : ''}
+      ${chart}</div>`;
+  }
+
+  function pauseCard(r) {
+    const ps = live(data.pauses).filter((p) => p.date >= r.from && p.date <= r.to);
+    const ss = live(data.sessions).filter((s) => s.date >= r.from && s.date <= r.to && kindOf(s.type) === 'study' && s.pausedSec !== undefined);
+    const rated = live(data.sessions).filter((s) => s.date >= r.from && s.date <= r.to && isWork(s) && s.focus >= 1 && s.focus <= 5);
+    if (!ps.length && !ss.length && !rated.length) return '';
+    const net = ss.reduce((n, s) => n + s.seconds, 0), pz = ss.reduce((n, s) => n + (s.pausedSec || 0), 0), score = net + pz ? Math.round(net / (net + pz) * 100) : null;
+    const by = {}; ps.forEach((p) => { const k = p.reason || 'none'; (by[k] = by[k] || { sec: 0, n: 0 }); by[k].sec += p.seconds; by[k].n++; });
+    const rows = Object.entries(by).sort((x, y) => y[1].sec - x[1].sec), top = rows.length ? rows[0][1].sec : 1;
+    const label = (k) => { const f = PAUSE_REASONS.find((x) => x[0] === k); return f ? `${f[1]} ${f[2]}` : 'No reason given'; };
+    const avgF = rated.length ? rated.reduce((n, s) => n + s.focus, 0) / rated.length : 0;
+    const dist = [1, 2, 3, 4, 5].map((v) => rated.filter((s) => s.focus === v).length), dmax = Math.max(1, ...dist);
+    const parts = [['Morning', 5, 12], ['Afternoon', 12, 17], ['Evening', 17, 21], ['Night', 21, 29]];
+    const hourOf = (s) => { const h = new Date(s.start).getHours(); return h < 5 ? h + 24 : h; };
+    const tod = parts.map(([n, a, b]) => { const l = rated.filter((s) => { const h = hourOf(s); return h >= a && h < b; }); return { n, c: l.length, avg: l.length ? l.reduce((x, s) => x + s.focus, 0) / l.length : 0 }; });
+    const bestT = tod.filter((x) => x.c >= 2).sort((a, b) => b.avg - a.avg)[0];
+    // last 6 weeks
+    const ws = weekStart(todayStr()), wk = [];
+    for (let i = 5; i >= 0; i--) {
+      const a = addDays(ws, -7 * i), b = addDays(a, 6), sl = live(data.sessions).filter((s) => s.date >= a && s.date <= b);
+      const rt = sl.filter((s) => isWork(s) && s.focus >= 1 && s.focus <= 5), pw = sl.filter((s) => kindOf(s.type) === 'study' && s.pausedSec !== undefined);
+      const n2 = pw.reduce((n, s) => n + s.seconds, 0), p2 = pw.reduce((n, s) => n + (s.pausedSec || 0), 0);
+      wk.push({ a, f: rt.length ? rt.reduce((n, s) => n + s.focus, 0) / rt.length : 0, sc: n2 + p2 ? Math.round(n2 / (n2 + p2) * 100) : null, np: live(data.pauses).filter((p) => p.date >= a && p.date <= b).length });
+    }
+    const wkHas = wk.some((x) => x.f || x.sc !== null);
+    return `<div class="card pz-card"><h2>Pauses & focus <small>how well your study time held up</small></h2>
+      <div class="pz-top"><div class="pz-score"><b>${score === null ? '–' : score + '%'}</b><span>focus score · time studying</span></div>
+        <div class="pz-n"><b>${avgF ? avgF.toFixed(1) + '<small> / 5</small>' : '–'}</b><span>average focus rating${rated.length ? ' · ' + rated.length + ' rated' : ''}</span></div>
+        <div class="pz-n"><b>${ps.length}</b><span>${ps.length === 1 ? 'pause' : 'pauses'}</span></div>
+        <div class="pz-n"><b>${ps.length ? short(ps.reduce((n, p) => n + p.seconds, 0)) : '–'}</b><span>paused in total</span></div>
+        <div class="pz-n"><b>${ps.length ? short(Math.round(ps.reduce((n, p) => n + p.seconds, 0) / ps.length)) : '–'}</b><span>average pause</span></div></div>
+      ${rated.length ? `<div class="pg-sub">Focus ratings</div><div class="pg-fd">${dist.map((c, i) => `<div><span class="pg-fb"><i style="height:${Math.max(c ? 8 : 2, c / dmax * 100)}%"></i></span><b>${c}</b><small>${FOCUS_NAMES[i]}</small></div>`).join('')}</div>
+        ${bestT ? `<div class="sm-chips"><span>⭐ You focus best in the <b>${bestT.n.toLowerCase()}</b> <small>(${bestT.avg.toFixed(1)} / 5)</small></span></div>` : ''}` : '<p class="note">Rate a session after it finishes and your focus pattern appears here.</p>'}
+      ${rows.length ? `<div class="pg-sub">Why you paused</div><div class="pz-rows">${rows.map(([k, v], i) => `<div class="pz-row"><span class="pz-l">${label(k)}</span><div class="pz-bar"><i style="width:${Math.max(4, v.sec / top * 100)}%;animation-delay:${i * 70}ms"></i></div><span class="pz-v">${short(v.sec)} · ${v.n}×</span></div>`).join('')}</div>` : (ss.length ? '<p class="note">No pauses of a minute or more in this period.</p>' : '')}
+      ${wkHas ? `<div class="pg-sub">Last 6 weeks</div><div class="pg-wk"><div class="h"><span></span><span>Focus</span><span>Studying</span><span>Pauses</span></div>${wk.map((x) => `<div><span>${esc(fmtShort(x.a))}</span><span>${x.f ? `<i class="pg-mini"><s style="width:${x.f / 5 * 100}%"></s></i>${x.f.toFixed(1)}` : '–'}</span><span>${x.sc === null ? '–' : x.sc + '%'}</span><span>${x.np || '–'}</span></div>`).join('')}</div>` : ''}
+    </div>`;
+  }
+
+  // last 26 weeks, one square per day, coloured by how close you got to your goal
+  function consistencyCard(m) {
+    const goal = dailyGoalSec() || 4 * 3600, today = todayStr(), N = 26, start = addDays(weekStart(today), -(N - 1) * 7);
+    const cols = ['#f1f5f9', '#dbeafe', '#93c5fd', '#3b82f6', '#1d4ed8'], C = 13, G = 3, LP = 30, TP = 16;
+    let g = '', hit = 0, act = 0, past = 0, lastMonth = -1, lastCol = -9;
+    for (let c = 0; c < N; c++) for (let rw = 0; rw < 7; rw++) {
+      const d = addDays(start, c * 7 + rw); if (d > today) continue;
+      const sec = m[d] || 0, ratio = sec / goal, lvl = sec <= 0 ? 0 : ratio < .25 ? 1 : ratio < .6 ? 2 : ratio < 1 ? 3 : 4; past++; if (sec > 0) act++; if (sec >= goal) hit++;
+      g += `<rect x="${LP + c * (C + G)}" y="${TP + rw * (C + G)}" width="${C}" height="${C}" rx="3" fill="${cols[lvl]}" ${isRest(d) ? 'stroke="#94a3b8" stroke-dasharray="2 2"' : ''} data-action="goto-day" data-date="${d}" style="cursor:pointer"><title>${esc(fmtLong(d))}: ${sec ? short(sec) : isRest(d) ? 'rest day' : 'nothing'}</title></rect>`;
+    }
+    for (let c = 0; c < N; c++) { const mo = parseYmd(addDays(start, c * 7)).getMonth(); if (mo !== lastMonth) { lastMonth = mo; if (c - lastCol < 3 && lastCol >= 0) continue; lastCol = c; g += `<text x="${LP + c * (C + G)}" y="10" font-size="10.5" fill="#64748b">${parseYmd(addDays(start, c * 7)).toLocaleDateString('en-IN', { month: 'short' })}</text>`; } }
+    ['Mon', 'Wed', 'Fri'].forEach((n, i) => { g += `<text x="0" y="${TP + i * 2 * (C + G) + 11}" font-size="10" fill="#94a3b8">${n}</text>`; });
+    const W = LP + N * (C + G), H = TP + 7 * (C + G);
+    let run = 0, bestRun = 0; const first = Object.keys(m).filter((d) => m[d] > 0).sort()[0];
+    if (first) for (let d = first; d <= today; d = addDays(d, 1)) { if (m[d] > 0) { run++; if (run > bestRun) bestRun = run; } else if (!streakSafe(d) && d !== today) run = 0; }
+    return `<div class="card"><h2>Consistency <small>last 26 weeks · tap a day to open it</small></h2>
+      <div class="pg-grid"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Study every day for 26 weeks">${g}</svg></div>
+      <div class="cal-legend">Less ${cols.map((c) => `<i style="background:${c}"></i>`).join('')} More <span style="margin-left:8px">(goal = ${short(goal)})</span></div>
+      <div class="sm-chips" style="margin-top:12px"><span>🔥 Streak <b>${streak()}</b> ${streak() === 1 ? 'day' : 'days'}</span><span>🏅 Longest <b>${bestRun}</b> ${bestRun === 1 ? 'day' : 'days'}</span><span>🎯 Goal reached <b>${hit}</b> of ${past} days</span><span>📅 Studied <b>${past ? Math.round(act / past * 100) : 0}%</b> of days</span></div></div>`;
+  }
+
+  function pointsTrendCard(r, nDays) {
+    if (nDays > 62) return '';
+    const pts = computePoints(), vals = [];
+    for (let i = 0; i < nDays; i++) { const d = addDays(r.from, i), x = pts.days[d]; vals.push({ d, total: x ? x.total : 0, has: !!x }); }
+    if (!vals.some((v) => v.has && v.total)) return '';
+    const sum = vals.reduce((n, v) => n + v.total, 0), hasV = vals.filter((v) => v.has), best = hasV.reduce((b, v) => (v.total > b.total ? v : b), hasV[0]);
+    const narrow = window.innerWidth <= 760, W = narrow ? 400 : 820, H = 190, L = narrow ? 40 : 46, R = 6, T = 12, B = 26, iw = W - L - R, ih = H - T - B;
+    const mx = Math.max(10, ...vals.map((v) => v.total)), mn = Math.min(0, ...vals.map((v) => v.total)), span = mx - mn, y = (v) => T + ih - ((v - mn) / span) * ih, slot = iw / vals.length, bw = Math.min(30, Math.max(3, slot * .64));
+    let g = '';
+    for (let i = 0; i <= 3; i++) { const v = mn + span * i / 3, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${Math.round(v)}</text>`; }
+    const every = Math.ceil(vals.length / (narrow ? 8 : 16));
+    vals.forEach((v, i) => { const x = L + slot * i + (slot - bw) / 2, y0 = y(0), y1 = y(v.total);
+      if (v.has && v.total) g += `<rect x="${x}" y="${Math.min(y0, y1)}" width="${bw}" height="${Math.max(1, Math.abs(y0 - y1))}" rx="3" fill="${v.total < 0 ? '#dc2626' : '#7c3aed'}"><title>${esc(fmtShort(v.d))}: ${v.total > 0 ? '+' : ''}${v.total} pts</title></rect>`;
+      if (i % every === 0) g += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle" font-size="11" fill="#64748b">${parseYmd(v.d).getDate()}</text>`; });
+    return `<div class="card"><h2>Points <small>earned per day</small></h2>
+      <div class="chart-wrap"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Points per day">${g}</svg></div>
+      <div class="sm-chips" style="margin-top:10px"><span>⭐ <b>${sum > 0 ? '+' : ''}${sum}</b> in this range</span>${best && best.total > 0 ? `<span>🏆 Best day <b>+${best.total}</b> <small>${esc(fmtShort(best.d))}</small></span>` : ''}${hasV.length ? `<span>Average <b>${Math.round(sum / hasV.length)}</b> a day</span>` : ''}</div></div>`;
+  }
+
+  function recordsCard(m, r) {
+    const days = Object.keys(m).filter((d) => m[d] > 0).sort();
+    if (!days.length) return '';
+    const inR = (d) => d >= r.from && d <= r.to;
+    let bd = days[0]; days.forEach((d) => { if (m[d] > m[bd]) bd = d; });
+    const wk = {}; days.forEach((d) => { const w = weekStart(d); wk[w] = (wk[w] || 0) + m[d]; });
+    let bw = Object.keys(wk)[0]; Object.keys(wk).forEach((w) => { if (wk[w] > wk[bw]) bw = w; });
+    let run = 0, bestRun = 0, runEnd = days[0]; for (let d = days[0]; d <= todayStr(); d = addDays(d, 1)) { if (m[d] > 0) { run++; if (run > bestRun) { bestRun = run; runEnd = d; } } else if (!streakSafe(d)) run = 0; }
+    const all = days.reduce((n, d) => n + m[d], 0), tag = (x) => (x ? ' <em class="pg-new">in this range</em>' : '');
+    return `<div class="card"><h2>Records <small>all time</small></h2><div class="pg-rec">
+      <div><span>Best day</span><b>${short(m[bd])}</b><small>${esc(fmtShort(bd))}${tag(inR(bd))}</small></div>
+      <div><span>Best week</span><b>${short(wk[bw])}</b><small>from ${esc(fmtShort(bw))}${tag(inR(bw) || inR(addDays(bw, 6)))}</small></div>
+      <div><span>Longest streak</span><b>${bestRun} ${bestRun === 1 ? 'day' : 'days'}</b><small>ended ${esc(fmtShort(runEnd))}${tag(inR(runEnd))}</small></div>
+      <div><span>Total studied</span><b>${Math.round(all / 3600)}h</b><small>${days.length} ${days.length === 1 ? 'day' : 'days'} · ${short(all / days.length)} per day</small></div></div></div>`;
+  }
+
   function pageProgress() {
-    const p = ui.prog, r = rangeOf();
+    const p = ui.prog, r = rangeOf(), studyMap = studyDayMap();
     const wr = p.mode === 'week' ? weekReview(r.from) : null;
     const all = live(data.sessions).filter((s) => s.date >= r.from && s.date <= r.to);
     const tot = totals(all);
@@ -1785,39 +2016,39 @@
       ${controls}
       <div class="stack">
         ${wr ? wr.summary : ''}
+        ${progHero(r, studyMap, nDays, elapsedDays)}
         <div class="tiles six">
-          <div class="tile"><div class="k">Total study</div><div class="v">${short(tot.study)}</div><div class="s">${wr ? wr.delta : (tot.study / 3600).toFixed(1) + ' hours'}</div></div>
-          <div class="tile"><div class="k">Daily average</div><div class="v">${short(tot.study / elapsedDays)}</div><div class="s">over ${elapsedDays} ${elapsedDays === 1 ? 'day' : 'days'}</div></div>
-          <div class="tile"><div class="k">Active days</div><div class="v">${activeDays}<span style="font-size:14px;color:var(--muted)"> / ${nDays}</span></div><div class="s">days with study</div></div>
-          <div class="tile"><div class="k">Best day</div><div class="v">${best && best.sec ? short(best.sec) : '–'}</div><div class="s">${best && best.sec ? fmtShort(best.d) : 'no data yet'}</div></div>
           <div class="tile"><div class="k">Breaks</div><div class="v">${short(tot.break)}</div><div class="s">${tot.study ? Math.round(tot.break / tot.study * 100) + '% of study' : '–'}</div></div>
           ${adhTile(r)}
           <div class="tile"><div class="k">Avg sleep</div><div class="v">${sleepNights ? short(tot.sleep / sleepNights) : '–'}</div><div class="s">${sleepNights ? 'over ' + sleepNights + (sleepNights === 1 ? ' night' : ' nights') : 'no sleep logged'}</div></div>
           ${wr ? wr.extraTiles : ''}
-          ${rated.length ? `<div class="tile"><div class="k">Avg focus</div><div class="v">${avgFocus.toFixed(1)}<span style="font-size:14px;color:var(--muted)"> / 5</span></div><div class="s">${rated.length} rated</div></div>` : ''}
           <div class="tile"><div class="k">Streak</div><div class="v">${streak()}<span style="font-size:14px;color:var(--muted)"> ${streak() === 1 ? 'day' : 'days'}</span></div><div class="s">current</div></div>
         </div>
 
         <div class="card">
-          <h2>${nDays > 62 ? 'Weekly' : 'Daily'} time <small>hours</small></h2>
-          <div class="chart-wrap">${barChart(r, perDay, nDays)}</div>
-          <div class="legend">${['study', 'break', 'neutral'].map((k) => `<span><span class="tdot" style="background:${KIND_COLOR[k]}"></span>${KLABEL[k]}</span>`).join('')}</div>
+          <h2>Study vs goal <small>${nDays > 62 ? 'hours per week' : 'hours per day'}</small></h2>
+          <div class="chart-wrap">${goalChart(r, studyMap, nDays)}</div>
+          <div class="legend"><span><span class="tdot" style="background:#16a34a"></span>Goal reached</span><span><span class="tdot" style="background:#2563eb"></span>Below goal</span><span><span class="tdot" style="background:#f59e0b"></span>Goal</span></div>
         </div>
-
-        ${tot.sleep && nDays <= 62 ? `<div class="card"><h2>Sleep <small>hours per night</small></h2><div class="chart-wrap">${barChart(r, perDay, nDays, ['sleep'])}</div></div>` : ''}
 
         ${p.mode === 'month' ? `<div class="card"><h2>Calendar <small>darker = more study · click a day to open it</small></h2>${heatmap(r, perDay)}</div>` : ''}
 
+        ${trendCard(studyMap)}
+        ${subjectBalanceCard(r, studyMap, nDays, elapsedDays)}
         <div class="two">
           ${subjectCard(all)}
           <div class="card"><h2>Time split</h2>${splitBar(tot)}</div>
         </div>
         ${pauseCard(r)}
+        ${consistencyCard(studyMap)}
+        ${pointsTrendCard(r, nDays)}
+        ${tot.sleep && nDays <= 62 ? `<div class="card"><h2>Sleep <small>hours per night</small></h2><div class="chart-wrap">${barChart(r, perDay, nDays, ['sleep'])}</div></div>` : ''}
+        ${recordsCard(studyMap, r)}
         ${wr ? wr.highlights + wr.days : ''}
       </div>`;
   }
 
-  function pauseCard(r) {
+  function pauseCardOld(r) {
     const ps = live(data.pauses).filter((p) => p.date >= r.from && p.date <= r.to);
     const ss = live(data.sessions).filter((s) => s.date >= r.from && s.date <= r.to && kindOf(s.type) === 'study' && s.pausedSec !== undefined);
     if (!ps.length && !ss.length) return '';
@@ -2624,10 +2855,12 @@
   //  timetable, check-ins, journal, sleep). Only rewards, redeemed items and
   //  the point settings are stored.
   // =====================================================================
+  // a study block pays in proportion to its planned length: blockM is the price of 1 hour, capped at 3 hours (older days keep the flat price)
+  const blockPtsFor = (d, b, v, cfg) => d >= (cfg.blockFrom || '0000-00-00') ? Math.min(v.blockM * 3, Math.max(1, Math.round(v.blockM * blockDur(b) / 60))) : v.blockM;
   const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, roundBase: 10, roundStep: 5, roundCap: 40, routineCap: 10, subjDay: 30, subjMin: 20, missSubject: 5, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
   const PT_LABELS = [
     ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['meditate30', 'Meditation, per 30 minutes (paid per minute)'], ['meditateMax', 'Meditation: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
-    ['blockM', 'Study block done'], ['routineCap', 'Routine logging (meals, shower…): maximum points per day'], ['roundBase', 'Focus round 2 reward (1h of study, then a break and back in 15 min)'], ['roundStep', 'Focus rounds: extra for each round after'], ['roundCap', 'Focus rounds: maximum reward'], ['subjDay', 'Every subject studied today: reward'], ['subjMin', 'Minutes of study per subject to count today'], ['missSubject', 'Subject skipped today: penalty each'],
+    ['blockM', 'Study block done: reward per hour of block length (30 min pays half, max 3 hours)'], ['routineCap', 'Routine logging (meals, shower…): maximum points per day'], ['roundBase', 'Focus round 2 reward (1h of study, then a break and back in 15 min)'], ['roundStep', 'Focus rounds: extra for each round after'], ['roundCap', 'Focus rounds: maximum reward'], ['subjDay', 'Every subject studied today: reward'], ['subjMin', 'Minutes of study per subject to count today'], ['missSubject', 'Subject skipped today: penalty each'],
     ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
     ['missGoal', 'Missed goal: maximum penalty'], ['missBlock', 'Missed study block'], ['cap', 'Daily penalty cap'],
@@ -2732,18 +2965,18 @@
         if (mpts) add(`Meditation ${short(msec)}`, mpts, 'earn'); }
       // timetable blocks
       const plan = resolvePlan(d);
-      let doneH = 0, doneM = 0, doneL = 0, missed = 0, nb = 0;
+      let doneH = 0, doneM = 0, doneL = 0, missed = 0, nb = 0, bpts = 0;
       plan.blocks.forEach((b) => {
         if (kindOf(b.type) !== 'study' || plan.skipped.includes(b.id)) return;
         nb++;
         const dur = blockDur(b) * 60;
         let act = actual[d + '|' + b.id] || 0;
         if (isToday && tm && tm.blockId === b.id && tm.planDate === d) act += tmElapsed;
-        if (dur > 0 && (act >= dur * 0.9 || (act > 0 && (plan.completed || []).includes(b.id)))) { doneM++; }
+        if (dur > 0 && (act >= dur * 0.9 || (act > 0 && (plan.completed || []).includes(b.id)))) { doneM++; bpts += blockPtsFor(d, b, v, cfg); }
         else if (act === 0 && blockTimes(d, b).endMs < now) missed++;
       });
       const nd = doneH + doneM + doneL;
-      if (nd) add(`${nd} study ${nd === 1 ? 'block' : 'blocks'} done`, nd * v.blockM, 'earn');
+      if (nd) add(`${nd} study ${nd === 1 ? 'block' : 'blocks'} done`, bpts, 'earn');
       if (nb >= 2 && nd === nb && v.noMiss > 0) add('No-miss day', v.noMiss, 'earn');
       const nf = list.filter((s) => kindOf(s.type) === 'study' && s.focus >= 4 && s.seconds >= 1800).length;
       if (nf) add(`${nf} focused ${nf === 1 ? 'session' : 'sessions'}`, nf * v.focus, 'earn');
@@ -2808,7 +3041,7 @@
         if (subs.every((s) => covered.has(s.id))) add('Every subject studied this week', v.allSubjects, 'earn');
       }
       if (v.routineCap > 0) { let room = v.routineCap; routineInfo(list, isToday ? tm : null).forEach((r) => { const p = Math.min(room, r.n * r.c.earn.pts); if (p > 0) { add(`Routine: ${r.c.name}${r.n > 1 ? ' ×' + r.n : ''}`, p, 'earn'); room -= p; } }); }
-      if (v.roundBase > 0) roundsOf(list, isToday ? tm : null).events.forEach((e) => add(`Focus round ${e.k} done`, e.pts, 'earn'));
+      if (v.roundBase > 0) roundsOf(list, isToday ? tm : null).events.forEach((e) => add(`Focus round ${e.k}${e.last ? ' (last round)' : ' done'}`, e.pts, 'earn'));
       let subMiss = [];
       if (subs.length >= 2 && d >= (cfg.subjFrom || start) && (v.subjDay > 0 || v.missSubject > 0)) {
         const ss = new Map(subs.map((x) => [x.id, 0]));
@@ -3087,7 +3320,7 @@
           const dur = blockDur(b) * 60; let act = sess.filter((s) => s.planDate === today && s.blockId === b.id).reduce((n, s) => n + s.seconds, 0);
           if (tm && tm.blockId === b.id && tm.planDate === today) act += tmEl;
           const ok = dur > 0 && (act >= dur * 0.9 || (act > 0 && (plan.completed || []).includes(b.id)));
-          if (ok) done++; else left += v.blockM;
+          if (ok) done++; else left += blockPtsFor(today, b, v, data.pointsCfg);
         });
         push({ id: 'blocks', name: 'Study blocks', pts: done === blocks.length ? earnedFor(/study block/) : left, state: done === blocks.length ? 'done' : 'open', pct: done / blocks.length * 100, note: `${done} of ${blocks.length} study blocks done${left ? ` · +${left} still to earn` : ''}`, dn: `All ${blocks.length} blocks done${earnedFor(/study block/) ? ` · earned +${earnedFor(/study block/)}` : ''}` });
       } }
@@ -3133,7 +3366,8 @@
       if (next && v['streak' + next] > 0) push({ id: 'streak', name: `${next}-day streak`, pts: v['streak' + next], state: 'open', pct: cur / next * 100, note: `${cur} of ${next} days${cur + 1 === next ? ' · study today to get it' : ` · ${next - cur} more day${next - cur === 1 ? '' : 's'}`}`, dots: next <= 10 ? { on: cur, total: next } : null }); }
     // 8a. focus rounds
     if (v.roundBase > 0) { const rs = roundNow(), nx = roundPts(rs.k), got = rs.events.reduce((n, e) => n + e.pts, 0);
-      push({ id: 'rounds', name: 'Focus rounds', pts: nx, state: 'open', pct: Math.min(100, rs.acc / ROUND_SEC * 100),
+      if (rs.closed) push({ id: 'rounds', name: 'Focus rounds', pts: 0, state: 'done', dn: `Ended for today after round ${rs.closed.k} (${short(rs.closed.sec)}) · earned +${got}` });
+      else push({ id: 'rounds', name: 'Focus rounds', pts: nx, state: 'open', pct: Math.min(100, rs.acc / ROUND_SEC * 100),
         note: `${rs.done ? `Round ${rs.k}: break due (10 min, back within 15)` : `Round ${rs.k} · ${short(rs.acc)} of 1h`}${nx ? ` · +${nx} when you return from the break` : ' · round 1 starts your chain'}${got ? ` · earned +${got} today` : ''}` }); }
     // 8a2. routine logging
     if (v.routineCap > 0) { const ri = routineInfo(sess, tm);
@@ -3326,11 +3560,12 @@
   const ROUND_SEC = 3600, ROUND_BRK = 480, ROUND_RET = 900;
   const roundPts = (k) => { const v = ptv(); return k >= 2 && v.roundBase > 0 ? Math.min(v.roundCap, v.roundBase + v.roundStep * (k - 2)) : 0; };
   function roundsOf(sessList, tmLive) {
-    const it = sessList.filter((s) => kindOf(s.type) === 'study').map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000 }));
-    if (tmLive && kindOf(tmLive.type) === 'study') it.push({ st: tmLive.startWall, sec: Math.round(elapsedMs(tmLive) / 1000), en: Date.now() });
+    const it = sessList.filter((s) => kindOf(s.type) === 'study').map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000, last: !!s.lastRound }));
+    if (tmLive && kindOf(tmLive.type) === 'study') it.push({ st: tmLive.startWall, sec: Math.round(elapsedMs(tmLive) / 1000), en: Date.now(), last: !!tmLive.lastRound });
     it.sort((a, b) => a.st - b.st);
-    let k = 1, acc = 0, last = null; const events = [];
+    let k = 1, acc = 0, last = null, closed = null; const events = [];
     it.forEach((x) => {
+      closed = null;
       if (last !== null) {
         const gap = (x.st - last) / 1000;
         if (gap >= ROUND_BRK) {
@@ -3339,13 +3574,15 @@
         }
       }
       acc += x.sec; last = x.en;
+      // "last round": at least half an hour of the round, topic finished. Pays at once (in proportion to the time) and closes the chain.
+      if (x.last && acc >= ROUND_SEC / 2) { const p = Math.round(roundPts(k) * Math.min(1, acc / ROUND_SEC)); if (p) events.push({ k, pts: p, last: true }); closed = { k, pts: p, sec: acc }; k = 1; acc = 0; }
     });
     // not studying right now: a long enough time away ends the round (and resets the chain if the 15 minutes ran out)
     if (last !== null && !(tmLive && kindOf(tmLive.type) === 'study')) {
       const away = (Date.now() - last) / 1000;
       if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) k = 1; if (acc < ROUND_SEC || away > ROUND_RET) acc = 0; }
     }
-    return { k, acc, events, done: acc >= ROUND_SEC };
+    return { k, acc, events, done: acc >= ROUND_SEC, closed };
   }
   // routine logging: small rewards for categories that have "earn" set (meals, shower...), capped per day
   function routineInfo(sessList, tmLive) {
@@ -3356,7 +3593,27 @@
     });
   }
   const roundNow = () => { const t = todayStr(); return roundsOf(live(data.sessions).filter((s) => s.date === t), data.timer); };
-  const rndText = () => { const r = roundNow(); return r.done ? `Round ${r.k} · break due` : `Round ${r.k} · ${Math.floor(r.acc / 60)}/60 min`; };
+  const rndText = () => { const r = roundNow(); if (r.closed) return `Last round done · +${r.closed.pts}`; return r.done ? `Round ${r.k} · break due` : `Round ${r.k} · ${Math.floor(r.acc / 60)}/60 min`; };
+  const lastToday = () => { const t = todayStr(); return live(data.sessions).some((x) => x.date === t && x.lastRound && kindOf(x.type) === 'study') || !!(data.timer && data.timer.lastRound); };
+  const lastRoundOk = () => { const r = roundNow(); return !r.closed && r.acc >= ROUND_SEC / 2 && !lastToday(); };
+  function lastRoundModal(sid) {
+    const rs = roundNow(), t = data.timer;
+    if (rs.acc < ROUND_SEC / 2) { toast('A last round needs at least 30 minutes of study in the round'); return; }
+    if (lastToday()) { toast('You have already ended your rounds today'); return; }
+    const frac = Math.min(1, rs.acc / ROUND_SEC), p = Math.round(roundPts(rs.k) * frac);
+    const s0 = sid ? data.sessions.find((x) => x.id === sid) : null, bid = t ? t.blockId : s0 && s0.blockId, bdate = t ? t.planDate : s0 && s0.planDate;
+    const blk = bid && bdate ? resolvePlan(bdate).blocks.find((x) => x.id === bid) : null;
+    const doneAlready = !!(blk && (resolvePlan(bdate).completed || []).includes(bid)) || !!(blk && blockActual(bdate, bid) >= blockDur(blk) * 60 * 0.9);
+    openModal('End today’s rounds?', `
+      <p style="line-height:1.55;margin-bottom:8px">Round <b>${rs.k}</b>: <b>${short(rs.acc)}</b> of 1h (${Math.round(frac * 100)}%).</p>
+      <p style="line-height:1.55;margin-bottom:10px">${p ? `You get <b>+${p}</b> now` : 'Round 1 has no reward, so this only ends the chain'}${frac < 1 && p ? ` (${Math.round(frac * 100)}% of ${roundPts(rs.k)})` : ''}. No break needed. The chain ends for today, and studying again starts a new chain at Round 1.</p>
+      <label class="chk"><input type="checkbox" id="lr-done" ${doneAlready ? 'checked' : ''}> This topic is complete${blk ? ` (${esc(blk.topic)})` : ''}</label>`, () => {
+      if (!$('#lr-done').checked) { toast('Tick that the topic is complete to end the chain'); return false; }
+      if (bid && bdate) markBlockDone(bdate, bid, true);
+      if (t) { t.lastRound = true; data.timerUpdatedAt = Date.now(); stopTimer(true); }
+      else if (s0) { s0.lastRound = true; touch(s0); persist(true); render(); toast(p ? `Last round done: +${p}` : 'Rounds ended for today'); }
+    }, 'End chain & claim');
+  }
   function takeRoundBreak() {
     if (data.timer) stopTimer(true, { quiet: true });
     startTimer({ type: 'break', topic: 'Break', mode: 'countdown', minutes: 10, roundBreak: true });
@@ -3369,6 +3626,7 @@
     const btns = [];
     if (t) btns.push({ label: 'Keep going: finish this block first', fn: () => { r.untilStop = t.id; } });
     btns.push({ label: 'Ask again in 10 min', fn: () => { r.snooze = Date.now() + 600000; } });
+    if (lastRoundOk()) btns.push({ label: 'This is my last round', fn: () => lastRoundModal(null) });
     btns.push({ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak });
     choiceModal(`${rs.k === 1 ? '1 hour' : 'Round ' + rs.k} of study done`, `
       <p style="line-height:1.55;margin-bottom:8px">You have studied <b>${short(rs.acc)}</b> this round. Take a <b>10 minute break</b>?</p>
@@ -3817,6 +4075,7 @@
       t.accumulatedMs += m * 60000; t.startWall -= m * 60000; t.backed = true; data.timerUpdatedAt = Date.now(); persist(true); render();
       toast(`Counted ${m} minutes from before you pressed start`);
     },
+    'last-round': () => lastRoundModal(null),
     'switch-topic': () => {
       const t = data.timer; if (!t) return;
       const topics = live(data.topics).filter((x) => x.type === t.type);
