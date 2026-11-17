@@ -866,3 +866,8 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
 .pz-card .pz-top { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
 .pg-grid svg { max-width: 640px; }
 .pg-fd > div { max-width: 90px; margin: 0 auto; width: 100%; }
+
+.em-opts { display: flex; flex-wrap: wrap; gap: 8px; }
+.em-opt { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border: 1.5px solid #dbe4f3; border-radius: 999px; cursor: pointer; font-size: 14px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--text, #0f172a); }
+.em-opt:has(input:checked) { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
+.em-opt input { accent-color: var(--blue); }

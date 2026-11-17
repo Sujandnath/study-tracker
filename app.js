@@ -510,7 +510,7 @@
       mode: spec.mode, targetSec: spec.mode === 'countdown' ? Math.round(spec.minutes * 60) : 0,
       accumulatedMs: 0, startedAt: Date.now(), startWall: Date.now(), comment: '', alerted: false,
       blockId: spec.blockId || null, planDate: spec.planDate || null, planSec: spec.mode === 'stopwatch' ? Math.round(spec.planSec || 0) : 0,
-      roundBreak: !!spec.roundBreak
+      roundBreak: !!spec.roundBreak, emergency: !!spec.emergency
     };
     data.timerUpdatedAt = Date.now();
     persist(true);
@@ -593,7 +593,7 @@
         id: sid, date: sessionDate(t.type, t.startWall, secs), start: t.startWall, seconds: secs,
         topic: name, type: t.type, priority: t.priority, comment: (t.comment || '').trim(),
         pausedSec: t.pauseSec || 0, pauses: t.pauseN || 0,
-        ...(t.lastRound ? { lastRound: true } : {}),
+        ...(t.lastRound ? { lastRound: true } : {}), ...(t.emergency ? { emergency: true } : {}), ...(t.skipBrk ? { skipBrk: true } : {}),
         ...(t.blockId ? { blockId: t.blockId, planDate: t.planDate } : {})
       }));
       ensureTopic(t.topic, t.type, t.priority);
@@ -629,7 +629,7 @@
       </div>
       ${pr ? `<div class="fc-why"><span class="note">Last pause (${short(pr.seconds)}): what pulled you away?</span><div class="pask-c">${PAUSE_REASONS.map(([k, e, l]) => `<button class="${pr.reason === k ? 'on' : ''}" data-action="pause-reason" data-id="${pr.id}" data-v="${k}"><i>${e}</i>${l}</button>`).join('')}</div></div>` : ''}
       ${rate ? `<p class="note" style="margin:14px 0 8px">How focused were you?</p><div class="rate big">${[1, 2, 3, 4, 5].map((k) => `<button data-action="set-focus" data-id="${sid}" data-v="${k}"><b>${k}</b><span>${FOCUS_WORDS[k - 1]}</span></button>`).join('')}</div>` : ''}`,
-      [{ label: 'Stopped by mistake? Resume', fn: restore }, ...(!data.timer && roundNow().acc >= ROUND_SEC ? [{ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak }] : []), ...(!data.timer && lastRoundOk() ? [{ label: 'Last round: end chain', fn: () => lastRoundModal(sid) }] : []), { label: rate ? 'Skip' : 'Done', cls: rate ? '' : 'primary' }]);
+      [{ label: 'Stopped by mistake? Resume', fn: restore }, ...(!data.timer && roundNow().acc >= ROUND_SEC ? [{ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak }] : []), ...(!data.timer && lastRoundOk() ? [{ label: 'Last round: end chain', fn: () => lastRoundModal(sid) }] : []), ...(!data.timer && emergencyOk() ? [{ label: 'Emergency break', fn: emergencyModal }] : []), { label: rate ? 'Skip' : 'Done', cls: rate ? '' : 'primary' }]);
     requestAnimationFrame(() => requestAnimationFrame(() => { const fg = $('#fc-fg'); if (fg) fg.style.strokeDashoffset = (C * (1 - score / 100)).toFixed(1); }));
   }
   function ensureTopic(name, type, priority) {
@@ -1261,7 +1261,7 @@
       <h2>Summary <small>${sd.entries} ${sd.entries === 1 ? 'entry' : 'entries'}</small></h2>
       <div class="sm-ctl"><div class="seg sm-per">${[['day', 'Day'], ['week', 'Week'], ['month', 'Month']].map(([k, l]) => `<button class="${sm.period === k ? 'on' : ''}" data-action="sum-period" data-v="${k}">${l}</button>`).join('')}</div></div>
       <div class="seg sm-tabs">${SUM_TABS.map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-action="sum-tab" data-v="${k}">${l}</button>`).join('')}</div>
-      ${sd.entries ? `<div class="sm-hero"><div><div class="sm-big">${hero}</div><div class="sm-sub">${sub}</div></div>${badge}</div>
+      ${sd.sess.some((x) => kindOf(x.type) !== 'sleep') ? `<div class="sm-hero"><div><div class="sm-big">${hero}</div><div class="sm-sub">${sub}</div></div>${badge}</div>
       ${bar}${body}` : `<div class="sm-none"><div class="sm-none-i">${sm.period === 'day' ? (isToday ? '☀️' : '🗓️') : '📅'}</div><b>${sm.period === 'day' ? (isToday ? 'A fresh day' : 'Nothing logged') : 'Nothing logged yet'}</b><span>${isToday && sm.period === 'day' ? 'Start a timer or add an entry and your breakdown will appear here.' : 'No entries for this ' + sm.period + '.'}</span></div>`}${goalStrip}
       <div class="sm-foot"><span class="sm-chip lav">${sleepChip}</span>${sd.untracked ? `<span class="sm-chip">⏳ <b>${short(sd.untracked)}</b> untracked <small>gaps over ${fmtDur(gapCapMin())}</small></span>` : ''}${sm.period === 'day' ? '<button class="linkbtn" data-action="sleep-log">Log sleep</button>' : ''}</div>
       ${sm.period === 'day' ? restLine(d) : ''}
@@ -1545,6 +1545,8 @@
           <div class="timer-extra">
             <button class="linkbtn" data-action="switch-topic">⇄ Switch topic</button>
             ${isStudyTimer(t) && lastRoundOk() ? '<button class="linkbtn" data-action="last-round">🏁 Finish as my last round</button>' : ''}
+            ${isStudyTimer(t) && emergencyOk() ? '<button class="linkbtn" data-action="emergency">🚿 Emergency break (30 min)</button>' : ''}
+            ${(t.roundBreak || t.emergency) ? '<button class="linkbtn" data-action="skip-break">⏭ Skip break &amp; start studying</button>' : ''}
             ${t.startedAt && !t.backed && elapsedMs(t) < 300000 ? '<span class="late"><span class="note">Started earlier?</span>' + [5, 10, 15].map((m) => `<button data-action="back-start" data-v="${m}">${m} min ago</button>`).join('') + '</span>' : ''}
           </div>
         </div>`;
@@ -1752,6 +1754,8 @@
   // =====================================================================
   //  PROGRESS PAGE PIECES (hero, goal chart, trend, subject balance, pauses & focus, consistency, points, records)
   // =====================================================================
+  // charts are drawn at the width they will really have, so text and bars keep their normal size on a wide screen
+  function chartW() { const w = window.innerWidth, m = w <= 760 ? w - 60 : w - 232 - 96; return Math.max(300, Math.min(1500, Math.round(m))); }
   const FOCUS_NAMES = ['Scattered', 'Distracted', 'Okay', 'Focused', 'Deep focus'];
   const studyDayMap = () => { const m = {}; live(data.sessions).forEach((s) => { if (kindOf(s.type) === 'study') m[s.date] = (m[s.date] || 0) + s.seconds; }); return m; };
   const sumDays = (m, from, n) => { let t = 0; for (let i = 0; i < n; i++) t += m[addDays(from, i)] || 0; return t; };
@@ -1794,12 +1798,12 @@
     const goal = dailyGoalSec(), today = todayStr(), weekly = nDays > 62, rest = data.settings.restPerWeek || 0, buckets = [];
     if (!weekly) for (let i = 0; i < nDays; i++) { const d = addDays(r.from, i); buckets.push({ label: String(parseYmd(d).getDate()), tip: fmtShort(d), sec: m[d] || 0, goal, rest: isRest(d), fut: d > today }); }
     else { let cur = r.from; while (cur <= r.to) { const end = addDays(cur, 6) > r.to ? r.to : addDays(cur, 6); let sec = 0; for (let d = cur; d <= end; d = addDays(d, 1)) sec += m[d] || 0; buckets.push({ label: fmtShort(cur), tip: `${fmtShort(cur)} – ${fmtShort(end)}`, sec, goal: goal * Math.max(1, Math.min(7, daysBetween(cur, end)) - (daysBetween(cur, end) >= 7 ? rest : 0)), rest: false, fut: cur > today }); cur = addDays(end, 1); } }
-    const narrow = window.innerWidth <= 760, W = narrow ? 400 : 820, H = narrow ? 230 : 250, L = narrow ? 40 : 46, R = 6, T = 12, B = 28, iw = W - L - R, ih = H - T - B;
+    const narrow = window.innerWidth <= 760, W = chartW(), H = narrow ? 230 : 250, L = narrow ? 40 : 46, R = 6, T = 12, B = 28, iw = W - L - R, ih = H - T - B;
     const maxH = Math.max(1, ...buckets.map((b) => Math.max(b.sec, b.goal) / 3600)), top = Math.ceil(maxH * 1.04);
     const slot = iw / buckets.length, bw = Math.min(36, Math.max(3, slot * .64)), y = (h) => T + ih - (h / top) * ih;
     let g = '';
     for (let i = 0; i <= 4; i++) { const v = top * i / 4, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${+v.toFixed(2)}h</text>`; }
-    const every = Math.ceil(buckets.length / (narrow ? 8 : 16));
+    const every = Math.ceil(buckets.length / Math.max(5, Math.floor(iw / 44)));
     buckets.forEach((b, i) => {
       const x = L + slot * i + (slot - bw) / 2, h = b.sec / 3600, ok = b.goal && b.sec >= b.goal;
       const tip = `${b.tip}: ${b.sec ? short(b.sec) : b.rest ? 'rest day' : 'nothing logged'}${b.goal ? ` · goal ${short(b.goal)}${ok ? ' ✓' : ''}` : ''}`;
@@ -1821,7 +1825,7 @@
     const wkGoal = dailyGoalSec() * Math.max(1, 7 - (data.settings.restPerWeek || 0));
     const last4 = done.slice(-4), prev4 = done.slice(-8, -4), a4 = last4.length ? last4.reduce((n, x) => n + x.sec, 0) / last4.length : 0, p4 = prev4.length ? prev4.reduce((n, x) => n + x.sec, 0) / prev4.length : 0;
     const bestW = rows.reduce((b, x) => (x.sec > b.sec ? x : b), rows[0]);
-    const narrow = window.innerWidth <= 760, W = narrow ? 400 : 820, H = 210, L = narrow ? 40 : 46, R = 6, T = 20, B = 26, iw = W - L - R, ih = H - T - B;
+    const narrow = window.innerWidth <= 760, W = chartW(), H = 210, L = narrow ? 40 : 46, R = 6, T = 20, B = 26, iw = W - L - R, ih = H - T - B;
     const top = Math.ceil(Math.max(1, ...rows.map((x) => x.sec / 3600), wkGoal / 3600) * 1.08), y = (h) => T + ih - (h / top) * ih, slot = iw / N, bw = Math.min(40, slot * .66);
     let g = '';
     for (let i = 0; i <= 4; i++) { const v = top * i / 4, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${Math.round(v)}h</text>`; }
@@ -1869,7 +1873,7 @@
     const colTot = weeks.map((w) => rows.reduce((n, e) => n + (e.wk[w] || 0), 0));
     let chart = '';
     if (colTot.some(Boolean)) {
-      const narrow = window.innerWidth <= 760, W = narrow ? 400 : 820, H = 200, L = narrow ? 40 : 46, R = 6, T = 10, B = 26, iw = W - L - R, ih = H - T - B, top = Math.ceil(Math.max(1, ...colTot.map((x) => x / 3600)) * 1.05), y = (h) => T + ih - (h / top) * ih, slot = iw / weeks.length, bw = Math.min(46, slot * .66);
+      const narrow = window.innerWidth <= 760, W = chartW(), H = 200, L = narrow ? 40 : 46, R = 6, T = 10, B = 26, iw = W - L - R, ih = H - T - B, top = Math.ceil(Math.max(1, ...colTot.map((x) => x / 3600)) * 1.05), y = (h) => T + ih - (h / top) * ih, slot = iw / weeks.length, bw = Math.min(46, slot * .66);
       let g = '';
       for (let i = 0; i <= 4; i++) { const v = top * i / 4, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${Math.round(v)}h</text>`; }
       weeks.forEach((w, i) => { const xx = L + slot * i + (slot - bw) / 2; let acc = 0;
@@ -1948,11 +1952,11 @@
     for (let i = 0; i < nDays; i++) { const d = addDays(r.from, i), x = pts.days[d]; vals.push({ d, total: x ? x.total : 0, has: !!x }); }
     if (!vals.some((v) => v.has && v.total)) return '';
     const sum = vals.reduce((n, v) => n + v.total, 0), hasV = vals.filter((v) => v.has), best = hasV.reduce((b, v) => (v.total > b.total ? v : b), hasV[0]);
-    const narrow = window.innerWidth <= 760, W = narrow ? 400 : 820, H = 190, L = narrow ? 40 : 46, R = 6, T = 12, B = 26, iw = W - L - R, ih = H - T - B;
+    const narrow = window.innerWidth <= 760, W = chartW(), H = 190, L = narrow ? 40 : 46, R = 6, T = 12, B = 26, iw = W - L - R, ih = H - T - B;
     const mx = Math.max(10, ...vals.map((v) => v.total)), mn = Math.min(0, ...vals.map((v) => v.total)), span = mx - mn, y = (v) => T + ih - ((v - mn) / span) * ih, slot = iw / vals.length, bw = Math.min(30, Math.max(3, slot * .64));
     let g = '';
     for (let i = 0; i <= 3; i++) { const v = mn + span * i / 3, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${Math.round(v)}</text>`; }
-    const every = Math.ceil(vals.length / (narrow ? 8 : 16));
+    const every = Math.ceil(vals.length / Math.max(5, Math.floor(iw / 44)));
     vals.forEach((v, i) => { const x = L + slot * i + (slot - bw) / 2, y0 = y(0), y1 = y(v.total);
       if (v.has && v.total) g += `<rect x="${x}" y="${Math.min(y0, y1)}" width="${bw}" height="${Math.max(1, Math.abs(y0 - y1))}" rx="3" fill="${v.total < 0 ? '#dc2626' : '#7c3aed'}"><title>${esc(fmtShort(v.d))}: ${v.total > 0 ? '+' : ''}${v.total} pts</title></rect>`;
       if (i % every === 0) g += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle" font-size="11" fill="#64748b">${parseYmd(v.d).getDate()}</text>`; });
@@ -2085,7 +2089,7 @@
       }
     }
     const narrow = window.innerWidth <= 760;
-    const W = narrow ? 400 : 820, H = narrow ? 230 : 250, L = narrow ? 40 : 46, R = 6, T = 12, B = 28;
+    const W = chartW(), H = narrow ? 230 : 250, L = narrow ? 40 : 46, R = 6, T = 12, B = 28;
     const iw = W - L - R, ih = H - T - B;
     const sumOf = (b) => keys.reduce((n, k) => n + b[k], 0);
     const maxH = Math.max(...buckets.map((b) => sumOf(b) / 3600), 0);
@@ -2097,7 +2101,7 @@
       const v = top * i / 4, yy = y(v);
       g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0" stroke-width="1"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${+v.toFixed(2)}h</text>`;
     }
-    const every = Math.ceil(buckets.length / (narrow ? 8 : 16));
+    const every = Math.ceil(buckets.length / Math.max(5, Math.floor(iw / 44)));
     buckets.forEach((b, i) => {
       const x = L + slot * i + (slot - bw) / 2;
       let acc = 0;
@@ -3197,7 +3201,7 @@
   function ptChart(pts) {
     const today = todayStr(), n = 14, vals = [];
     for (let i = n - 1; i >= 0; i--) { const d = addDays(today, -i), x = pts.days[d]; vals.push({ d, total: x ? x.total : 0, has: !!x }); }
-    const narrow = window.innerWidth <= 760, W = narrow ? 400 : 820, H = 200, L = 44, R = 6, T = 14, B = 26;
+    const narrow = window.innerWidth <= 760, W = chartW(), H = 200, L = 44, R = 6, T = 14, B = 26;
     const mx = Math.max(10, ...vals.map((x) => x.total)), mn = Math.min(0, ...vals.map((x) => x.total));
     const span = mx - mn, ih = H - T - B, y = (v) => T + (mx - v) / span * ih, slot = (W - L - R) / n, bw = Math.min(30, slot * 0.62);
     let g = '';
@@ -3557,32 +3561,41 @@
   //  A break of 8+ minutes ends it. Coming back within 15 minutes of the break
   //  earns a reward from round 2 on, growing with each round. Counted per day.
   // =====================================================================
-  const ROUND_SEC = 3600, ROUND_BRK = 480, ROUND_RET = 900;
+  const ROUND_SEC = 3600, ROUND_BRK = 480, ROUND_RET = 900, ROUND_EM = 1800, ROUND_EM_MAX = 2100; // emergency break: 30 min, plus 5 minutes' grace
   const roundPts = (k) => { const v = ptv(); return k >= 2 && v.roundBase > 0 ? Math.min(v.roundCap, v.roundBase + v.roundStep * (k - 2)) : 0; };
   function roundsOf(sessList, tmLive) {
     const it = sessList.filter((s) => kindOf(s.type) === 'study').map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000, last: !!s.lastRound }));
     if (tmLive && kindOf(tmLive.type) === 'study') it.push({ st: tmLive.startWall, sec: Math.round(elapsedMs(tmLive) / 1000), en: Date.now(), last: !!tmLive.lastRound });
     it.sort((a, b) => a.st - b.st);
-    let k = 1, acc = 0, last = null, closed = null; const events = [];
+    // emergency breaks (once per chain, keep the chain alive) and skipped breaks (count as a break taken)
+    const ems = sessList.filter((s) => s.emergency).map((s) => s.start), skips = sessList.filter((s) => s.skipBrk).map((s) => s.start);
+    if (tmLive && tmLive.emergency) ems.push(tmLive.startWall);
+    let k = 1, acc = 0, last = null, closed = null, usedEm = false, emNow = false; const events = [];
     it.forEach((x) => {
       closed = null;
       if (last !== null) {
-        const gap = (x.st - last) / 1000;
-        if (gap >= ROUND_BRK) {
-          if (acc >= ROUND_SEC) { if (gap <= ROUND_RET) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; } else k = 1; }
+        const gap = (x.st - last) / 1000, inGap = (t0) => t0 >= last - 120000 && t0 < x.st;
+        const em = !usedEm && gap >= ROUND_BRK && gap <= ROUND_EM_MAX && ems.some(inGap);
+        const sk = acc >= ROUND_SEC && gap < ROUND_BRK && skips.some(inGap);
+        if (em) { // the emergency break: progress is kept, and a finished round counts as having had its break
+          usedEm = true;
+          if (acc >= ROUND_SEC) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; acc = 0; }
+        } else if (gap >= ROUND_BRK || sk) {
+          if (acc >= ROUND_SEC) { if (gap <= ROUND_RET) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; } else { k = 1; usedEm = false; } }
           acc = 0;
         }
       }
       acc += x.sec; last = x.en;
       // "last round": at least half an hour of the round, topic finished. Pays at once (in proportion to the time) and closes the chain.
-      if (x.last && acc >= ROUND_SEC / 2) { const p = Math.round(roundPts(k) * Math.min(1, acc / ROUND_SEC)); if (p) events.push({ k, pts: p, last: true }); closed = { k, pts: p, sec: acc }; k = 1; acc = 0; }
+      if (x.last && acc >= ROUND_SEC / 2) { const p = Math.round(roundPts(k) * Math.min(1, acc / ROUND_SEC)); if (p) events.push({ k, pts: p, last: true }); closed = { k, pts: p, sec: acc }; k = 1; acc = 0; usedEm = false; }
     });
     // not studying right now: a long enough time away ends the round (and resets the chain if the 15 minutes ran out)
     if (last !== null && !(tmLive && kindOf(tmLive.type) === 'study')) {
       const away = (Date.now() - last) / 1000;
-      if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) k = 1; if (acc < ROUND_SEC || away > ROUND_RET) acc = 0; }
+      if (!usedEm && away <= ROUND_EM_MAX && ems.some((t0) => t0 >= last - 120000)) usedEm = emNow = true; // an emergency break is running or has just finished: nothing resets yet
+      else if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) { k = 1; usedEm = false; } if (acc < ROUND_SEC || away > ROUND_RET) acc = 0; }
     }
-    return { k, acc, events, done: acc >= ROUND_SEC, closed };
+    return { k, acc, events, done: acc >= ROUND_SEC, closed, emUsed: usedEm, emActive: !!(tmLive && tmLive.emergency) };
   }
   // routine logging: small rewards for categories that have "earn" set (meals, shower...), capped per day
   function routineInfo(sessList, tmLive) {
@@ -3593,7 +3606,7 @@
     });
   }
   const roundNow = () => { const t = todayStr(); return roundsOf(live(data.sessions).filter((s) => s.date === t), data.timer); };
-  const rndText = () => { const r = roundNow(); if (r.closed) return `Last round done · +${r.closed.pts}`; return r.done ? `Round ${r.k} · break due` : `Round ${r.k} · ${Math.floor(r.acc / 60)}/60 min`; };
+  const rndText = () => { const r = roundNow(); if (r.emActive) return 'Emergency break · chain safe'; if (r.closed) return `Last round done · +${r.closed.pts}`; return r.done ? `Round ${r.k} · break due` : `Round ${r.k} · ${Math.floor(r.acc / 60)}/60 min`; };
   const lastToday = () => { const t = todayStr(); return live(data.sessions).some((x) => x.date === t && x.lastRound && kindOf(x.type) === 'study') || !!(data.timer && data.timer.lastRound); };
   const lastRoundOk = () => { const r = roundNow(); return !r.closed && r.acc >= ROUND_SEC / 2 && !lastToday(); };
   function lastRoundModal(sid) {
@@ -3614,6 +3627,28 @@
       else if (s0) { s0.lastRound = true; touch(s0); persist(true); render(); toast(p ? `Last round done: +${p}` : 'Rounds ended for today'); }
     }, 'End chain & claim');
   }
+  // emergency break: 30 minutes (+5 grace), once per chain, named by you (shower, meal...). It does not break the chain or lose the round's progress.
+  const emergencyOk = () => { const r = roundNow(); return !r.closed && !r.emUsed && !r.emActive && (r.acc > 0 || r.k > 1) && !(data.timer && !isStudyTimer(data.timer)); };
+  function emergencyModal() {
+    if (!emergencyOk()) { toast('Your emergency break for this chain is already used'); return; }
+    const cats = live(data.categories).filter((c) => c.earn && c.earn.pts > 0 && c.kind === 'neutral');
+    const opts = [...cats.map((c) => ({ v: c.id, l: c.name })), { v: '', l: 'Something else' }];
+    openModal('Emergency break', `
+      <p style="line-height:1.55;margin-bottom:12px">Take up to <b>30 minutes</b> (plus 5 minutes of grace). Your round progress and your chain are kept. You can do this <b>once per chain</b>.</p>
+      <div class="field"><label>What is it for?</label><div class="em-opts">${opts.map((o, i) => `<label class="em-opt"><input type="radio" name="em-what" value="${esc(o.v)}" ${i === 0 ? 'checked' : ''}><span>${esc(o.l)}</span></label>`).join('')}</div></div>
+      <div class="field"><label>Name it (optional)</label><input type="text" id="em-name" maxlength="40" placeholder="e.g. Phone call, Toilet, Family"></div>`, () => {
+      const sel = ($('input[name=em-what]:checked') || {}).value || '', c = cats.find((x) => x.id === sel), nm = ($('#em-name').value || '').trim();
+      const type = c ? c.id : 'break', topic = nm || (c ? c.name : 'Emergency break');
+      if (data.timer) stopTimer(true, { quiet: true });
+      startTimer({ type, topic, mode: 'countdown', minutes: ROUND_EM / 60, emergency: true });
+      render();
+    }, 'Start break');
+  }
+  // skipping a break counts it as taken: the round that was waiting for it is finished and the next one starts
+  function skipBreak() {
+    const t = data.timer; if (!t || !(t.roundBreak || t.emergency)) return;
+    t.skipBrk = true; backToStudy(); toast('Break skipped. Your round counts and the next one has started');
+  }
   function takeRoundBreak() {
     if (data.timer) stopTimer(true, { quiet: true });
     startTimer({ type: 'break', topic: 'Break', mode: 'countdown', minutes: 10, roundBreak: true });
@@ -3627,6 +3662,7 @@
     if (t) btns.push({ label: 'Keep going: finish this block first', fn: () => { r.untilStop = t.id; } });
     btns.push({ label: 'Ask again in 10 min', fn: () => { r.snooze = Date.now() + 600000; } });
     if (lastRoundOk()) btns.push({ label: 'This is my last round', fn: () => lastRoundModal(null) });
+    if (emergencyOk()) btns.push({ label: 'Emergency break (30 min)', fn: emergencyModal });
     btns.push({ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak });
     choiceModal(`${rs.k === 1 ? '1 hour' : 'Round ' + rs.k} of study done`, `
       <p style="line-height:1.55;margin-bottom:8px">You have studied <b>${short(rs.acc)}</b> this round. Take a <b>10 minute break</b>?</p>
@@ -3655,7 +3691,7 @@
     if (isStudyTimer(t) && t.startedAt) {
       if (Date.now() < r.snooze || r.untilStop === t.id) return;
       if (roundNow().acc >= ROUND_SEC) roundDialog(t);
-    } else if (t.roundBreak && kindOf(t.type) === 'break' && t.mode === 'countdown' && t.startedAt && el >= t.targetSec && !t.backAsked) {
+    } else if ((t.emergency || (t.roundBreak && kindOf(t.type) === 'break')) && t.mode === 'countdown' && t.startedAt && el >= t.targetSec && !t.backAsked) {
       t.backAsked = true; persist(true); if (data.settings.sound !== false) ting(); backDialog();
     }
   }
@@ -4076,6 +4112,8 @@
       toast(`Counted ${m} minutes from before you pressed start`);
     },
     'last-round': () => lastRoundModal(null),
+    'emergency': () => emergencyModal(),
+    'skip-break': () => skipBreak(),
     'switch-topic': () => {
       const t = data.timer; if (!t) return;
       const topics = live(data.topics).filter((x) => x.type === t.type);
@@ -4385,6 +4423,6 @@
     bkInit();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
+    window.__st = { rndText, roundNow, get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();
