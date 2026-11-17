@@ -2163,6 +2163,69 @@
   // =====================================================================
   //  TOPICS & PRESETS PAGE
   // =====================================================================
+
+  // =====================================================================
+  //  VERSION + RULES PAGE
+  //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
+  // =====================================================================
+  const APP_VERSION = 44, APP_DATE = '17 Nov 2026';
+  const CHANGELOG = [
+    [44, '17 Nov', 'Version number shown in Settings, and this Rules page.'],
+    [43, '17 Nov', 'Emergency break (30 min, once per chain, keeps your chain) and Skip break.'],
+    [42, '17 Nov', 'Summary shows the "fresh day" message when only sleep is logged.'],
+    [41, '17 Nov', 'Progress charts drawn at normal size on wide screens.'],
+    [40, '17 Nov', 'New Progress page: headline, goal line, 12-week trend, subject balance, pauses & focus, consistency, points, records.'],
+    [39, '17 Nov', 'Study blocks pay by length: 30 min half, 2 hours double, up to 3 hours.'],
+    [38, '17 Nov', 'Last round: finish a round early (30+ min, topic complete) and get paid in proportion.'],
+    [37, '16 Nov', 'Summary card with tabs, clickable links in block notes, up to 3 blocks on Today, automatic folder backup.']
+  ];
+  const rulesOpen = () => { if (ui.rulesOpen === undefined) { try { ui.rulesOpen = localStorage.getItem('st-rules-open') === '1'; } catch (e) { ui.rulesOpen = false; } } return ui.rulesOpen; };
+  function rulesBody() {
+    const v = ptv(), cfg = data.pointsCfg, st = data.settings, hh = (m) => (m % 60 === 0 ? m / 60 + 'h' : short(m * 60));
+    const sec = (title, items) => `<div class="rl-sec"><h3>${title}</h3><ul>${items.map((x) => `<li>${x}</li>`).join('')}</ul></div>`;
+    const rows = PT_LABELS.map(([k, l]) => `<div class="rl-row"><span>${esc(l)}</span><b>${v[k]}</b></div>`).join('');
+    return `<div class="rl-intro">These rules use your current settings, so the numbers here always match what the app does. Version <b>${APP_VERSION}</b>, ${APP_DATE}.</div>
+      ${sec('Studying and your goal', [
+        `Only <b>study</b> counts as study: toward your goal, your subjects and your streak. Other activities are logged but do not count.`,
+        `Study pays <b>${v.study30} points per 30 minutes</b> (per minute). Reaching your daily goal (${short(st.dailyGoalMin * 60)}) earns <b>+${v.goal}</b>.`,
+        `A rest day or a streak shield does not break your streak.`])}
+      ${sec('Timetable blocks', [
+        `A block counts as done when you study <b>90%</b> of its planned length, or when you mark it complete.`,
+        `A block pays <b>${v.blockM} points per hour</b> of its length: 30 minutes pays half, 2 hours pays double, and the most one block pays is <b>${v.blockM * 3}</b> (3 hours). This applies from ${cfg.blockFrom ? fmtLong(cfg.blockFrom) : 'today'}; earlier days paid a flat ${v.blockM}.`,
+        `A planned study block you did not study at all, once its time has passed, costs <b>−${v.missBlock}</b>. Skipped blocks are ignored. Finishing every planned block (2 or more) earns <b>+${v.noMiss}</b>.`])}
+      ${sec('Every subject, every day', [
+        `Study <b>every subject</b> (each with topics, except those switched off for weekly) for at least <b>${v.subjMin} minutes</b> in a day and you earn <b>+${v.subjDay}</b>.`,
+        `Each subject you skip costs <b>−${v.missSubject}</b> at the end of the day. This counts from ${cfg.subjFrom ? fmtLong(cfg.subjFrom) : 'today'}.`,
+        `Weekly: studying every subject during a week earns <b>+${v.allSubjects}</b>.`])}
+      ${sec('Focus rounds', [
+        `<b>60 minutes</b> of study, across any topics or blocks, is one round. Pauses do not count as breaks.`,
+        `A break of <b>8+ minutes</b> ends the round. Come back within <b>15 minutes</b> and the next round starts: the chain continues.`,
+        `Reward from round 2: <b>+${v.roundBase}</b>, then <b>+${v.roundStep}</b> more for each round, up to <b>+${v.roundCap}</b>. Round 1 pays nothing; it starts the chain. It is counted per day.`,
+        `Away more than 15 minutes after a full hour: the chain resets to Round 1. An 8+ minute break before the hour is up restarts that round's minutes.`,
+        `<b>Skip break:</b> while a round break or emergency break is running you can skip it. After a full round it counts as taken, so the round pays and the next one starts. Mid-round, skipping changes nothing.`])}
+      ${sec('Last round', [
+        `Finish a round early with <b>at least 30 minutes</b> in it and the topic marked complete. You are paid at once, in proportion to the time: 45 of 60 minutes pays 75% of that round's reward. No break is needed.`,
+        `It ends the chain for the day and can be used <b>once a day</b>. Studying again later starts a new chain at Round 1.`])}
+      ${sec('Emergency break', [
+        `Once per chain you can take a <b>30 minute</b> break for something that cannot wait (a shower, a meal, a call). Name it yourself. There are <b>5 minutes of grace</b>, so up to 35 minutes.`,
+        `It does <b>not</b> break the chain. Mid-round your minutes are kept; after a full hour it counts as that round's break.`,
+        `Only one per chain. It is available again once the chain resets. Over 35 minutes, the normal rules apply.`])}
+      ${sec('Routine logging', [
+        `Logging routine activities (meals, shower and any category with a reward set) earns small points, up to <b>${v.routineCap} a day</b>. Set each category's reward and minimum time in Topics & Presets.`])}
+      ${sec('Pauses', [
+        `Your pause budget is <b>${st.pauseBudget || 0} minutes per hour</b> of session (0 means off), and you get a reminder when a single pause lasts <b>${st.longPause || 0} minutes</b>.`])}
+      ${sec('Rewards and prices', [
+        `Points buy rewards. You can borrow up to <b>${v.loanMax.toLocaleString('en-IN')}</b> points: a <b>${v.loanFee}%</b> fee is added once and the debt never grows after that.`,
+        `Levels: ${LEVELS.map(([n, p]) => `${n} (${p})`).join(', ')}.`,
+        `You can lock all points and prices for ${LOCK_DAYS} days so one bad day cannot change the rules.`])}
+      <details class="rl-all"><summary>Every point value and price</summary>${rows}</details>
+      <div class="rl-hist"><h3>What changed</h3>${CHANGELOG.map(([n, d, t]) => `<div><b>v${n}</b><i>${esc(d)}</i><span>${esc(t)}</span></div>`).join('')}</div>`;
+  }
+  function rulesCard() {
+    const open = rulesOpen();
+    return `<div class="card rl-card"><h2>Rules <span><small class="ver">v${APP_VERSION}</small> <button class="btn sm" data-action="rules-toggle">${open ? 'Hide rules' : 'Show rules'}</button></span></h2>
+      ${open ? rulesBody() : '<p class="note">Every rule of the app in one place, kept up to date. Hidden until you open it.</p>'}</div>`;
+  }
   function pageLibrary() {
     const topics = live(data.topics).sort((a, b) => a.name.localeCompare(b.name));
     const presets = live(data.presets);
@@ -2187,10 +2250,11 @@
                 <button class="btn sm danger" data-action="preset-del" data-id="${p.id}">Delete</button>
               </div>`).join('') : '<div class="empty"><b>No presets</b>A preset remembers a topic and a duration.</div>'}
           </div>
+          ${rulesCard()}
           ${syncCard()}
           ${installCard()}
           <div class="card">
-            <h2>Settings &amp; backup</h2>
+            <h2>Settings &amp; backup <small class="ver" title="Released ${APP_DATE}">v${APP_VERSION}</small></h2>
             <div class="field"><label>Daily study goal (minutes)</label>
               <input type="number" min="0" max="1440" step="15" data-change="goal" value="${data.settings.dailyGoalMin}"></div>
             <div class="field"><label>Longest gap counted as break (minutes)</label>
@@ -4112,6 +4176,7 @@
       toast(`Counted ${m} minutes from before you pressed start`);
     },
     'last-round': () => lastRoundModal(null),
+    'rules-toggle': () => { ui.rulesOpen = !rulesOpen(); try { localStorage.setItem('st-rules-open', ui.rulesOpen ? '1' : '0'); } catch (e) { /* private mode */ } render(); },
     'emergency': () => emergencyModal(),
     'skip-break': () => skipBreak(),
     'switch-topic': () => {
@@ -4423,6 +4488,6 @@
     bkInit();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { rndText, roundNow, get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
+    window.__st = { rndText, roundNow, APP_VERSION, get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();
