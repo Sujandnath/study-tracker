@@ -2197,8 +2197,12 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 49, APP_DATE = '18 Nov 2026';
+  const APP_VERSION = 53, APP_DATE = '18 Nov 2026';
   const CHANGELOG = [
+    [53, '18 Nov', 'Focus rounds final check: Rules wording fixed (a break only ends a round after a full hour). No behaviour change.'],
+    [52, '18 Nov', 'Focus rounds now pay the moment the hour is done. The break and returning within 15 minutes only keep the chain going.'],
+    [51, '18 Nov', 'Focus rounds: a stray few-second tap of the timer no longer interrupts a break, and the Break over message shows your back-by time.'],
+    [50, '18 Nov', 'Focus rounds audit: overlapping entries no longer fake a break, a logged shower/meal no longer triggers the emergency question, and pressing Emergency then Skip spends the emergency break.'],
     [49, '18 Nov', 'Focus rounds: leaving for more than 15 minutes in the middle of a round now also ends the chain (back to Round 1), not just the minutes.'],
     [48, '18 Nov', 'Focus rounds: a break of up to 15 min in the middle of a round keeps your minutes; an emergency break is judged by the break itself (up to 50 min door to door, so unlogged minutes around it no longer cancel it).'],
     [47, '18 Nov', 'Focus rounds: pill shows real round time and a "back by" time, tap it for the round breakdown. Need longer? button turns a break into the emergency break. Late return asks if it was an emergency. A logged shower/meal between rounds allows 30 min.'],
@@ -2232,11 +2236,11 @@
         `Each subject you skip costs <b>−${v.missSubject}</b> at the end of the day. This counts from ${cfg.subjFrom ? fmtLong(cfg.subjFrom) : 'today'}.`,
         `Weekly: studying every subject during a week earns <b>+${v.allSubjects}</b>.`])}
       ${sec('Focus rounds', [
-        `<b>60 minutes</b> of study, across any topics or blocks, is one round. Pauses do not count as breaks.`,
-        `A break of <b>8+ minutes</b> ends the round. Come back within <b>15 minutes</b> and the next round starts: the chain continues.`,
-        `Reward from round 2: <b>+${v.roundBase}</b>, then <b>+${v.roundStep}</b> more for each round, up to <b>+${v.roundCap}</b>. Round 1 pays nothing; it starts the chain. It is counted per day.`,
+        `<b>60 minutes</b> of study, across any topics or blocks, is one round. Pauses do not count as breaks. A round pays <b>the moment its hour is done</b>.`,
+        `After a full hour, a break of <b>8+ minutes</b> ends the round. Come back within <b>15 minutes</b> and the next round starts: the chain continues. The break and the return only keep the chain; the reward is already yours.`,
+        `Reward from round 2: <b>+${v.roundBase}</b>, then <b>+${v.roundStep}</b> more for each round, up to <b>+${v.roundCap}</b>. Round 1 pays nothing; it starts the chain. A round's reward depends on its number in the chain, and it is counted per day.`,
         `Away more than 15 minutes, whether after a full hour or in the middle of a round: the chain resets to Round 1 and the round's minutes are lost. A break of 8 to 15 minutes in the middle of a round keeps your minutes.`,
-        `<b>Skip break:</b> while a round break or emergency break is running you can skip it. After a full round it counts as taken, so the round pays and the next one starts. Mid-round, skipping changes nothing.`])}
+        `<b>Skip break:</b> while a round break or emergency break is running you can skip it. After a full round it counts as taken, so the next round starts. Mid-round, skipping changes nothing.`])}
       ${sec('Last round', [
         `Finish a round early with <b>at least 30 minutes</b> in it and the topic marked complete. You are paid at once, in proportion to the time: 45 of 60 minutes pays 75% of that round's reward. No break is needed.`,
         `It ends the chain for the day and can be used <b>once a day</b>. Studying again later starts a new chain at Round 1.`])}
@@ -3503,8 +3507,8 @@
     // 8a. focus rounds
     if (v.roundBase > 0) { const rs = roundNow(), nx = roundPts(rs.k), got = rs.events.reduce((n, e) => n + e.pts, 0);
       if (rs.closed) push({ id: 'rounds', name: 'Focus rounds', pts: 0, state: 'done', dn: `Ended for today after round ${rs.closed.k} (${short(rs.closed.sec)}) · earned +${got}` });
-      else push({ id: 'rounds', name: 'Focus rounds', pts: nx, state: 'open', pct: Math.min(100, rs.acc / ROUND_SEC * 100),
-        note: `${rs.done ? `Round ${rs.k}: break due (10 min, back within 15)` : `Round ${rs.k} · ${short(rs.acc)} of 1h`}${nx ? ` · +${nx} when you return from the break` : ' · round 1 starts your chain'}${got ? ` · earned +${got} today` : ''}` }); }
+      else push({ id: 'rounds', name: 'Focus rounds', pts: rs.done ? roundPts(rs.k + 1) : nx, state: 'open', pct: Math.min(100, rs.acc / ROUND_SEC * 100),
+        note: `${rs.done ? `Round ${rs.k} done${nx ? ` (+${nx} paid)` : ''}: break due (10 min, back within 15 to keep the chain)` : `Round ${rs.k} · ${short(rs.acc)} of 1h`}${!rs.done ? (nx ? ` · +${nx} when the hour is done` : ' · round 1 starts your chain') : ''}${got ? ` · earned +${got} today` : ''}` }); }
     // 8a2. routine logging
     if (v.routineCap > 0) { const ri = routineInfo(sess, tm);
       if (ri.length) {
@@ -3709,7 +3713,7 @@
   const ROUND_EM_GAP = 3000; // emergency break itself up to 35 min, plus unlogged minutes before and after it
   const emNowTest = (ems, last) => ems.some((t0) => t0 >= last - 120000);
   function roundsOf(sessList, tmLive) {
-    const it = sessList.filter((s) => kindOf(s.type) === 'study').map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000, last: !!s.lastRound, eb: !!s.emBefore }));
+    const it = sessList.filter((s) => kindOf(s.type) === 'study' && s.seconds >= 60).map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000, last: !!s.lastRound, eb: !!s.emBefore }));
     if (tmLive && kindOf(tmLive.type) === 'study') it.push({ st: tmLive.startWall, sec: Math.round(elapsedMs(tmLive) / 1000), en: Date.now(), last: !!tmLive.lastRound, eb: !!tmLive.emBefore });
     it.sort((a, b) => a.st - b.st);
     // emergency breaks (once per chain, keep the chain alive) and skipped breaks (count as a break taken)
@@ -3718,7 +3722,7 @@
     const rcat = new Set(live(data.categories).filter((c) => c.earn && c.earn.pts > 0 && c.kind === 'neutral').map((c) => c.id));
     const rts = sessList.filter((s) => rcat.has(s.type) && !s.emergency && s.seconds >= 60).map((s) => s.start);
     let parts = [];
-    let k = 1, acc = 0, last = null, closed = null, usedEm = false, emNow = false; const events = [];
+    let k = 1, acc = 0, last = null, closed = null, usedEm = false, emNow = false, paid = false; const events = []; // a round pays the moment its hour is done (paid), the break and the return only keep the chain
     it.forEach((x) => {
       closed = null;
       if (last !== null) {
@@ -3728,26 +3732,30 @@
         const sk = acc >= ROUND_SEC && gap < ROUND_BRK && skips.some(inGap);
         if (em) { // the emergency break: progress is kept, and a finished round counts as having had its break
           usedEm = true;
-          if (acc >= ROUND_SEC) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; acc = 0; parts = []; }
+          if (acc >= ROUND_SEC) { k++; acc = 0; parts = []; paid = false; }
         } else if (gap >= ROUND_BRK || sk) {
-          if (acc >= ROUND_SEC) { if (gap <= ROUND_RET || rt) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; } else { k = 1; usedEm = false; } }
+          if (sk && !usedEm && ems.some(inGap)) usedEm = true; // pressed Emergency, then skipped: the once-per-chain break is spent
+          if (acc >= ROUND_SEC) { if (gap <= ROUND_RET || rt) { k++; } else { k = 1; usedEm = false; } }
           else if (!sk && gap <= ROUND_RET) { /* a short break in the middle of a round: the minutes so far are kept */ } else { acc = 0; parts = []; k = 1; usedEm = false; } // a long break in the middle of a round also ends the chain
-          if (acc >= ROUND_SEC || sk) { acc = 0; parts = []; }
+          if (acc >= ROUND_SEC || sk) { acc = 0; parts = []; paid = false; }
         }
       }
-      acc += x.sec; last = x.en; parts.push({ st: x.st, sec: x.sec, eb: x.eb });
+      acc += x.sec; last = last === null ? x.en : Math.max(last, x.en); parts.push({ st: x.st, sec: x.sec, eb: x.eb });
+      if (!paid && acc >= ROUND_SEC) { paid = true; const p = roundPts(k); if (p) events.push({ k, pts: p }); }
       // "last round": at least half an hour of the round, topic finished. Pays at once (in proportion to the time) and closes the chain.
-      if (x.last && acc >= ROUND_SEC / 2) { const p = Math.round(roundPts(k) * Math.min(1, acc / ROUND_SEC)); if (p) events.push({ k, pts: p, last: true }); closed = { k, pts: p, sec: acc }; k = 1; acc = 0; usedEm = false; parts = []; }
+      if (x.last && acc >= ROUND_SEC / 2) { const p = paid ? roundPts(k) : Math.round(roundPts(k) * Math.min(1, acc / ROUND_SEC)); if (p && !paid) events.push({ k, pts: p, last: true }); closed = { k, pts: p, sec: acc }; k = 1; acc = 0; usedEm = false; parts = []; paid = false; }
     });
     // not studying right now: a long enough time away ends the round (and resets the chain if the 15 minutes ran out)
     let late = null;
     if (last !== null && !(tmLive && kindOf(tmLive.type) === 'study')) {
       const away = (Date.now() - last) / 1000;
-      if (acc >= ROUND_SEC && away > ROUND_RET && away <= ROUND_EM_MAX && !usedEm && !emNowTest(ems, last)) late = { k, acc };
+      const rtNow = away <= ROUND_EM_MAX && rts.some((t0) => t0 >= last - 120000);
+      if (acc >= ROUND_SEC && away > ROUND_RET && away <= ROUND_EM_MAX && !usedEm && !emNowTest(ems, last) && !rtNow) late = { k, acc };
       if (!usedEm && away <= ROUND_EM_GAP && ems.some((t0) => t0 >= last - 120000)) usedEm = emNow = true; // an emergency break is running or has just finished: nothing resets yet
+      else if (rtNow && acc >= ROUND_SEC) { /* a logged shower or meal: the chain is not reset yet */ }
       else if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) { k = 1; usedEm = false; } if (away > ROUND_RET) { if (acc < ROUND_SEC) { k = 1; usedEm = false; } acc = 0; } }
     }
-    return { k, acc, events, parts, lastEn: last, late, done: acc >= ROUND_SEC, closed, emUsed: usedEm, emActive: !!(tmLive && tmLive.emergency) };
+    return { k, acc, events, parts, paid: paid && acc >= ROUND_SEC, lastEn: last, late, done: acc >= ROUND_SEC, closed, emUsed: usedEm, emActive: !!(tmLive && tmLive.emergency) };
   }
   // routine logging: small rewards for categories that have "earn" set (meals, shower...), capped per day
   function routineInfo(sessList, tmLive) {
@@ -3762,7 +3770,7 @@
   const rndText = () => {
     const r = roundNow(), t = data.timer;
     if (r.closed) return `Last round done · +${r.closed.pts}`;
-    if (r.emActive) return `Emergency break · chain safe · back by ${hhmm(r.lastEn + (ROUND_EM_MAX) * 1000)}`;
+    if (r.emActive) return r.lastEn ? `Emergency break · chain safe · back by ${hhmm(r.lastEn + (ROUND_EM_MAX) * 1000)}` : 'Emergency break · chain safe';
     const base = r.done ? `Round ${r.k} · break due · ${short(r.acc)}` : `Round ${r.k} · ${Math.floor(r.acc / 60)}/60 min`;
     if (r.done && r.lastEn && t && !isStudyTimer(t)) return `${base} · back by ${hhmm(r.lastEn + ROUND_RET * 1000)}`;
     return base;
@@ -3838,7 +3846,7 @@
     btns.push({ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak });
     choiceModal(`${rs.k === 1 ? '1 hour' : 'Round ' + rs.k} of study done`, `
       <p style="line-height:1.55;margin-bottom:8px">You have studied <b>${short(rs.acc)}</b> this round. Take a <b>10 minute break</b>?</p>
-      <p class="note">${nx ? `Come back within 15 minutes of the break to earn <b>+${nx}</b>.` : 'Round 1 starts your chain. Come back within 15 minutes of the break and each round after it earns a reward.'}</p>`, btns);
+      <p class="note">${rs.paid ? `This round is already paid${roundPts(rs.k) ? ` (+${roundPts(rs.k)})` : ''}. ` : ''}Come back within 15 minutes of the break to keep your chain${roundPts(rs.k + 1) ? ` and earn <b>+${roundPts(rs.k + 1)}</b> for round ${rs.k + 1}` : ''}.</p>`, btns);
   }
   function nextStudyBlock() {
     const d = activePlanDate(), plan = resolvePlan(d), now = Date.now();
@@ -3854,7 +3862,8 @@
   }
   function backDialog() {
     const nb = nextStudyBlock();
-    choiceModal('Break over', `<p style="line-height:1.55">Back to studying to keep your round chain going?${nb.b ? `<br><span class="note">Next: ${esc(nb.b.topic)} (${nb.b.start}–${nb.b.end})</span>` : ''}</p>`,
+    const rs0 = roundNow(), dl0 = rs0.lastEn && rs0.acc >= ROUND_SEC ? rs0.lastEn + (data.timer && data.timer.emergency ? ROUND_EM_MAX : ROUND_RET) * 1000 : 0;
+    choiceModal('Break over', `<p style="line-height:1.55">Back to studying to keep your round chain going?${dl0 ? `<br><b>Back by ${hhmm(dl0)}</b> to keep your chain.` : ''}${nb.b ? `<br><span class="note">Next: ${esc(nb.b.topic)} (${nb.b.start}–${nb.b.end})</span>` : ''}</p>`,
       [{ label: 'Not yet' }, { label: 'Back to studying', cls: 'primary', fn: backToStudy }]);
   }
   function roundWatch(t, el) {
