@@ -2197,8 +2197,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 48, APP_DATE = '18 Nov 2026';
+  const APP_VERSION = 49, APP_DATE = '18 Nov 2026';
   const CHANGELOG = [
+    [49, '18 Nov', 'Focus rounds: leaving for more than 15 minutes in the middle of a round now also ends the chain (back to Round 1), not just the minutes.'],
     [48, '18 Nov', 'Focus rounds: a break of up to 15 min in the middle of a round keeps your minutes; an emergency break is judged by the break itself (up to 50 min door to door, so unlogged minutes around it no longer cancel it).'],
     [47, '18 Nov', 'Focus rounds: pill shows real round time and a "back by" time, tap it for the round breakdown. Need longer? button turns a break into the emergency break. Late return asks if it was an emergency. A logged shower/meal between rounds allows 30 min.'],
     [46, '18 Nov', 'Workout incentives: a daily Move goal (reward, and a penalty from 18 Nov), active breaks, a small study bonus on workout days, a Workouts card on Progress, and a search box for Points settings.'],
@@ -2234,7 +2235,7 @@
         `<b>60 minutes</b> of study, across any topics or blocks, is one round. Pauses do not count as breaks.`,
         `A break of <b>8+ minutes</b> ends the round. Come back within <b>15 minutes</b> and the next round starts: the chain continues.`,
         `Reward from round 2: <b>+${v.roundBase}</b>, then <b>+${v.roundStep}</b> more for each round, up to <b>+${v.roundCap}</b>. Round 1 pays nothing; it starts the chain. It is counted per day.`,
-        `Away more than 15 minutes after a full hour: the chain resets to Round 1. An 8+ minute break before the hour is up restarts that round's minutes.`,
+        `Away more than 15 minutes, whether after a full hour or in the middle of a round: the chain resets to Round 1 and the round's minutes are lost. A break of 8 to 15 minutes in the middle of a round keeps your minutes.`,
         `<b>Skip break:</b> while a round break or emergency break is running you can skip it. After a full round it counts as taken, so the round pays and the next one starts. Mid-round, skipping changes nothing.`])}
       ${sec('Last round', [
         `Finish a round early with <b>at least 30 minutes</b> in it and the topic marked complete. You are paid at once, in proportion to the time: 45 of 60 minutes pays 75% of that round's reward. No break is needed.`,
@@ -3730,7 +3731,7 @@
           if (acc >= ROUND_SEC) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; acc = 0; parts = []; }
         } else if (gap >= ROUND_BRK || sk) {
           if (acc >= ROUND_SEC) { if (gap <= ROUND_RET || rt) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; } else { k = 1; usedEm = false; } }
-          else if (!sk && gap <= ROUND_RET) { /* a short break in the middle of a round: the minutes so far are kept */ } else { acc = 0; parts = []; }
+          else if (!sk && gap <= ROUND_RET) { /* a short break in the middle of a round: the minutes so far are kept */ } else { acc = 0; parts = []; k = 1; usedEm = false; } // a long break in the middle of a round also ends the chain
           if (acc >= ROUND_SEC || sk) { acc = 0; parts = []; }
         }
       }
@@ -3744,7 +3745,7 @@
       const away = (Date.now() - last) / 1000;
       if (acc >= ROUND_SEC && away > ROUND_RET && away <= ROUND_EM_MAX && !usedEm && !emNowTest(ems, last)) late = { k, acc };
       if (!usedEm && away <= ROUND_EM_GAP && ems.some((t0) => t0 >= last - 120000)) usedEm = emNow = true; // an emergency break is running or has just finished: nothing resets yet
-      else if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) { k = 1; usedEm = false; } if (away > ROUND_RET) acc = 0; }
+      else if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) { k = 1; usedEm = false; } if (away > ROUND_RET) { if (acc < ROUND_SEC) { k = 1; usedEm = false; } acc = 0; } }
     }
     return { k, acc, events, parts, lastEn: last, late, done: acc >= ROUND_SEC, closed, emUsed: usedEm, emActive: !!(tmLive && tmLive.emergency) };
   }
