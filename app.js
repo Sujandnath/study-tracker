@@ -2197,8 +2197,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 47, APP_DATE = '18 Nov 2026';
+  const APP_VERSION = 48, APP_DATE = '18 Nov 2026';
   const CHANGELOG = [
+    [48, '18 Nov', 'Focus rounds: a break of up to 15 min in the middle of a round keeps your minutes; an emergency break is judged by the break itself (up to 50 min door to door, so unlogged minutes around it no longer cancel it).'],
     [47, '18 Nov', 'Focus rounds: pill shows real round time and a "back by" time, tap it for the round breakdown. Need longer? button turns a break into the emergency break. Late return asks if it was an emergency. A logged shower/meal between rounds allows 30 min.'],
     [46, '18 Nov', 'Workout incentives: a daily Move goal (reward, and a penalty from 18 Nov), active breaks, a small study bonus on workout days, a Workouts card on Progress, and a search box for Points settings.'],
     [45, '17 Nov', 'New level ladder (10 levels, scaled to your pace) and a monthly season rank.'],
@@ -2242,6 +2243,7 @@
         `Once per chain you can take a <b>30 minute</b> break for something that cannot wait (a shower, a meal, a call). Name it yourself. There are <b>5 minutes of grace</b>, so up to 35 minutes.`,
         `It does <b>not</b> break the chain. Mid-round your minutes are kept; after a full hour it counts as that round's break.`,
         `Only one per chain. It is available again once the chain resets. Over 35 minutes, the normal rules apply.`,
+        `Minutes before and after the emergency break that you did not log are forgiven, up to 50 minutes in total from your last study to the next.`,
         `<b>Need longer?</b> On a running 10 minute break, tap it to turn it into your emergency break. If you come back 15 to 35 minutes late and it is still unused, the app asks if it was an emergency.`,
         `A logged <b>shower or meal</b> (a routine category) between rounds also allows up to 30 minutes without using your emergency break.`,
         `The round pill shows your real round time and the <b>back by</b> time; tap it for the breakdown.`])}
@@ -3703,6 +3705,7 @@
   // =====================================================================
   const ROUND_SEC = 3600, ROUND_BRK = 480, ROUND_RET = 900, ROUND_EM = 1800, ROUND_EM_MAX = 2100; // emergency break: 30 min, plus 5 minutes' grace
   const roundPts = (k) => { const v = ptv(); return k >= 2 && v.roundBase > 0 ? Math.min(v.roundCap, v.roundBase + v.roundStep * (k - 2)) : 0; };
+  const ROUND_EM_GAP = 3000; // emergency break itself up to 35 min, plus unlogged minutes before and after it
   const emNowTest = (ems, last) => ems.some((t0) => t0 >= last - 120000);
   function roundsOf(sessList, tmLive) {
     const it = sessList.filter((s) => kindOf(s.type) === 'study').map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000, last: !!s.lastRound, eb: !!s.emBefore }));
@@ -3719,7 +3722,7 @@
       closed = null;
       if (last !== null) {
         const gap = (x.st - last) / 1000, inGap = (t0) => t0 >= last - 120000 && t0 < x.st;
-        const em = !usedEm && gap >= ROUND_BRK && gap <= ROUND_EM_MAX && (ems.some(inGap) || x.eb);
+        const em = !usedEm && gap >= ROUND_BRK && ((gap <= ROUND_EM_GAP && ems.some(inGap)) || (gap <= ROUND_EM_MAX && x.eb));
         const rt = !em && gap >= ROUND_BRK && gap <= ROUND_EM_MAX && rts.some(inGap); // a logged shower/meal between rounds: up to 30 min, emergency break not used
         const sk = acc >= ROUND_SEC && gap < ROUND_BRK && skips.some(inGap);
         if (em) { // the emergency break: progress is kept, and a finished round counts as having had its break
@@ -3727,7 +3730,8 @@
           if (acc >= ROUND_SEC) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; acc = 0; parts = []; }
         } else if (gap >= ROUND_BRK || sk) {
           if (acc >= ROUND_SEC) { if (gap <= ROUND_RET || rt) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; } else { k = 1; usedEm = false; } }
-          acc = 0; parts = [];
+          else if (!sk && gap <= ROUND_RET) { /* a short break in the middle of a round: the minutes so far are kept */ } else { acc = 0; parts = []; }
+          if (acc >= ROUND_SEC || sk) { acc = 0; parts = []; }
         }
       }
       acc += x.sec; last = x.en; parts.push({ st: x.st, sec: x.sec, eb: x.eb });
@@ -3739,8 +3743,8 @@
     if (last !== null && !(tmLive && kindOf(tmLive.type) === 'study')) {
       const away = (Date.now() - last) / 1000;
       if (acc >= ROUND_SEC && away > ROUND_RET && away <= ROUND_EM_MAX && !usedEm && !emNowTest(ems, last)) late = { k, acc };
-      if (!usedEm && away <= ROUND_EM_MAX && ems.some((t0) => t0 >= last - 120000)) usedEm = emNow = true; // an emergency break is running or has just finished: nothing resets yet
-      else if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) { k = 1; usedEm = false; } if (acc < ROUND_SEC || away > ROUND_RET) acc = 0; }
+      if (!usedEm && away <= ROUND_EM_GAP && ems.some((t0) => t0 >= last - 120000)) usedEm = emNow = true; // an emergency break is running or has just finished: nothing resets yet
+      else if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) { k = 1; usedEm = false; } if (away > ROUND_RET) acc = 0; }
     }
     return { k, acc, events, parts, lastEn: last, late, done: acc >= ROUND_SEC, closed, emUsed: usedEm, emActive: !!(tmLive && tmLive.emergency) };
   }
