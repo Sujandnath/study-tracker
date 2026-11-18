@@ -506,6 +506,7 @@
   const elapsedMs = (t) => t.accumulatedMs + (t.startedAt ? Date.now() - t.startedAt : 0);
 
   function startTimer(spec) {
+    const lateRs = data.timer ? null : roundNow();
     const topic = (spec.topic || '').trim();
     data.timer = {
       id: uid(), topic, type: spec.type, priority: spec.priority,
@@ -518,6 +519,7 @@
     persist(true);
     ui.page = 'today'; ui.date = todayStr();
     render();
+    if (lateRs && lateRs.late && kindOf(spec.type) === 'study') setTimeout(() => lateAsk(lateRs.late), 400);
   }
   const PAUSE_REASONS = [['water', '💧', 'Water'], ['phone', '📱', 'Phone'], ['washroom', '🚻', 'Washroom'], ['distracted', '🌀', 'Distracted'], ['other', '✨', 'Other']];
   const pmm = (s) => { s = Math.max(0, Math.floor(s)); return s >= 3600 ? hms(s) : String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
@@ -595,7 +597,7 @@
         id: sid, date: sessionDate(t.type, t.startWall, secs), start: t.startWall, seconds: secs,
         topic: name, type: t.type, priority: t.priority, comment: (t.comment || '').trim(),
         pausedSec: t.pauseSec || 0, pauses: t.pauseN || 0,
-        ...(t.lastRound ? { lastRound: true } : {}), ...(t.emergency ? { emergency: true } : {}), ...(t.active ? { active: true } : {}), ...(t.skipBrk ? { skipBrk: true } : {}),
+        ...(t.lastRound ? { lastRound: true } : {}), ...(t.emergency ? { emergency: true } : {}), ...(t.active ? { active: true } : {}), ...(t.skipBrk ? { skipBrk: true } : {}), ...(t.emBefore ? { emBefore: true } : {}),
         ...(t.blockId ? { blockId: t.blockId, planDate: t.planDate } : {})
       }));
       ensureTopic(t.topic, t.type, t.priority);
@@ -1520,7 +1522,7 @@
             <span class="pill" style="background:#eff6ff;color:${cat(t.type).color}">${esc(cat(t.type).name)}</span>
 
             ${t.blockId ? '<span class="pill" style="background:#eff6ff;color:#1d4ed8">From timetable</span>' : ''}
-            ${isStudyTimer(t) ? `<span class="pill rnd" id="rnd">${rndText()}</span>` : ''}
+            ${isStudyTimer(t) || t.roundBreak || t.emergency ? `<span class="pill rnd" id="rnd" data-action="rnd-info" style="cursor:pointer">${rndText()}</span>` : ''}
           </div>
           <div class="tstage ${t.startedAt || !isStudyTimer(t) ? 'run' : 'pz'} ${anim ? 'go-' + anim : ''}">
             <div class="face main-f">
@@ -1548,6 +1550,7 @@
             <button class="linkbtn" data-action="switch-topic">⇄ Switch topic</button>
             ${isStudyTimer(t) && lastRoundOk() ? '<button class="linkbtn" data-action="last-round">🏁 Finish as my last round</button>' : ''}
             ${isStudyTimer(t) && emergencyOk() ? '<button class="linkbtn" data-action="emergency">🚿 Emergency break (30 min)</button>' : ''}
+            ${t.roundBreak && !t.emergency && !roundNow().emUsed ? '<button class="linkbtn" data-action="need-longer">⏱ Need longer? Use emergency break</button>' : ''}
             ${(t.roundBreak || t.emergency) ? '<button class="linkbtn" data-action="skip-break">⏭ Skip break &amp; start studying</button>' : ''}
             ${t.startedAt && !t.backed && elapsedMs(t) < 300000 ? '<span class="late"><span class="note">Started earlier?</span>' + [5, 10, 15].map((m) => `<button data-action="back-start" data-v="${m}">${m} min ago</button>`).join('') + '</span>' : ''}
           </div>
@@ -2194,8 +2197,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 46, APP_DATE = '18 Nov 2026';
+  const APP_VERSION = 47, APP_DATE = '18 Nov 2026';
   const CHANGELOG = [
+    [47, '18 Nov', 'Focus rounds: pill shows real round time and a "back by" time, tap it for the round breakdown. Need longer? button turns a break into the emergency break. Late return asks if it was an emergency. A logged shower/meal between rounds allows 30 min.'],
     [46, '18 Nov', 'Workout incentives: a daily Move goal (reward, and a penalty from 18 Nov), active breaks, a small study bonus on workout days, a Workouts card on Progress, and a search box for Points settings.'],
     [45, '17 Nov', 'New level ladder (10 levels, scaled to your pace) and a monthly season rank.'],
     [44, '17 Nov', 'Version number shown in Settings, and this Rules page.'],
@@ -2237,7 +2241,10 @@
       ${sec('Emergency break', [
         `Once per chain you can take a <b>30 minute</b> break for something that cannot wait (a shower, a meal, a call). Name it yourself. There are <b>5 minutes of grace</b>, so up to 35 minutes.`,
         `It does <b>not</b> break the chain. Mid-round your minutes are kept; after a full hour it counts as that round's break.`,
-        `Only one per chain. It is available again once the chain resets. Over 35 minutes, the normal rules apply.`])}
+        `Only one per chain. It is available again once the chain resets. Over 35 minutes, the normal rules apply.`,
+        `<b>Need longer?</b> On a running 10 minute break, tap it to turn it into your emergency break. If you come back 15 to 35 minutes late and it is still unused, the app asks if it was an emergency.`,
+        `A logged <b>shower or meal</b> (a routine category) between rounds also allows up to 30 minutes without using your emergency break.`,
+        `The round pill shows your real round time and the <b>back by</b> time; tap it for the breakdown.`])}
       ${sec('Workouts and the Move goal', [
         `<b>Move goal:</b> <b>${v.moveMin} minutes</b> of workout in a day earns <b>+${v.move}</b>. A session counts when its name or category has workout, exercise, gym, yoga, fitness, walk, run, jog, stretch, cardio, cycling, swim or sport in it. Workout time also pays ${v.workout30} points per 30 minutes (up to ${v.workoutMax} blocks a day).`,
         `A day without it costs <b>−${v.missMove}</b>, never on a rest day, from ${cfg.movePenFrom ? fmtLong(cfg.movePenFrom) : 'tomorrow'}. All penalties together are capped at −${v.cap} a day.`,
@@ -3696,39 +3703,46 @@
   // =====================================================================
   const ROUND_SEC = 3600, ROUND_BRK = 480, ROUND_RET = 900, ROUND_EM = 1800, ROUND_EM_MAX = 2100; // emergency break: 30 min, plus 5 minutes' grace
   const roundPts = (k) => { const v = ptv(); return k >= 2 && v.roundBase > 0 ? Math.min(v.roundCap, v.roundBase + v.roundStep * (k - 2)) : 0; };
+  const emNowTest = (ems, last) => ems.some((t0) => t0 >= last - 120000);
   function roundsOf(sessList, tmLive) {
-    const it = sessList.filter((s) => kindOf(s.type) === 'study').map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000, last: !!s.lastRound }));
-    if (tmLive && kindOf(tmLive.type) === 'study') it.push({ st: tmLive.startWall, sec: Math.round(elapsedMs(tmLive) / 1000), en: Date.now(), last: !!tmLive.lastRound });
+    const it = sessList.filter((s) => kindOf(s.type) === 'study').map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000, last: !!s.lastRound, eb: !!s.emBefore }));
+    if (tmLive && kindOf(tmLive.type) === 'study') it.push({ st: tmLive.startWall, sec: Math.round(elapsedMs(tmLive) / 1000), en: Date.now(), last: !!tmLive.lastRound, eb: !!tmLive.emBefore });
     it.sort((a, b) => a.st - b.st);
     // emergency breaks (once per chain, keep the chain alive) and skipped breaks (count as a break taken)
     const ems = sessList.filter((s) => s.emergency).map((s) => s.start), skips = sessList.filter((s) => s.skipBrk).map((s) => s.start);
     if (tmLive && tmLive.emergency) ems.push(tmLive.startWall);
+    const rcat = new Set(live(data.categories).filter((c) => c.earn && c.earn.pts > 0 && c.kind === 'neutral').map((c) => c.id));
+    const rts = sessList.filter((s) => rcat.has(s.type) && !s.emergency && s.seconds >= 60).map((s) => s.start);
+    let parts = [];
     let k = 1, acc = 0, last = null, closed = null, usedEm = false, emNow = false; const events = [];
     it.forEach((x) => {
       closed = null;
       if (last !== null) {
         const gap = (x.st - last) / 1000, inGap = (t0) => t0 >= last - 120000 && t0 < x.st;
-        const em = !usedEm && gap >= ROUND_BRK && gap <= ROUND_EM_MAX && ems.some(inGap);
+        const em = !usedEm && gap >= ROUND_BRK && gap <= ROUND_EM_MAX && (ems.some(inGap) || x.eb);
+        const rt = !em && gap >= ROUND_BRK && gap <= ROUND_EM_MAX && rts.some(inGap); // a logged shower/meal between rounds: up to 30 min, emergency break not used
         const sk = acc >= ROUND_SEC && gap < ROUND_BRK && skips.some(inGap);
         if (em) { // the emergency break: progress is kept, and a finished round counts as having had its break
           usedEm = true;
-          if (acc >= ROUND_SEC) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; acc = 0; }
+          if (acc >= ROUND_SEC) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; acc = 0; parts = []; }
         } else if (gap >= ROUND_BRK || sk) {
-          if (acc >= ROUND_SEC) { if (gap <= ROUND_RET) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; } else { k = 1; usedEm = false; } }
-          acc = 0;
+          if (acc >= ROUND_SEC) { if (gap <= ROUND_RET || rt) { const p = roundPts(k); if (p) events.push({ k, pts: p }); k++; } else { k = 1; usedEm = false; } }
+          acc = 0; parts = [];
         }
       }
-      acc += x.sec; last = x.en;
+      acc += x.sec; last = x.en; parts.push({ st: x.st, sec: x.sec, eb: x.eb });
       // "last round": at least half an hour of the round, topic finished. Pays at once (in proportion to the time) and closes the chain.
-      if (x.last && acc >= ROUND_SEC / 2) { const p = Math.round(roundPts(k) * Math.min(1, acc / ROUND_SEC)); if (p) events.push({ k, pts: p, last: true }); closed = { k, pts: p, sec: acc }; k = 1; acc = 0; usedEm = false; }
+      if (x.last && acc >= ROUND_SEC / 2) { const p = Math.round(roundPts(k) * Math.min(1, acc / ROUND_SEC)); if (p) events.push({ k, pts: p, last: true }); closed = { k, pts: p, sec: acc }; k = 1; acc = 0; usedEm = false; parts = []; }
     });
     // not studying right now: a long enough time away ends the round (and resets the chain if the 15 minutes ran out)
+    let late = null;
     if (last !== null && !(tmLive && kindOf(tmLive.type) === 'study')) {
       const away = (Date.now() - last) / 1000;
+      if (acc >= ROUND_SEC && away > ROUND_RET && away <= ROUND_EM_MAX && !usedEm && !emNowTest(ems, last)) late = { k, acc };
       if (!usedEm && away <= ROUND_EM_MAX && ems.some((t0) => t0 >= last - 120000)) usedEm = emNow = true; // an emergency break is running or has just finished: nothing resets yet
       else if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) { k = 1; usedEm = false; } if (acc < ROUND_SEC || away > ROUND_RET) acc = 0; }
     }
-    return { k, acc, events, done: acc >= ROUND_SEC, closed, emUsed: usedEm, emActive: !!(tmLive && tmLive.emergency) };
+    return { k, acc, events, parts, lastEn: last, late, done: acc >= ROUND_SEC, closed, emUsed: usedEm, emActive: !!(tmLive && tmLive.emergency) };
   }
   // routine logging: small rewards for categories that have "earn" set (meals, shower...), capped per day
   function routineInfo(sessList, tmLive) {
@@ -3739,7 +3753,26 @@
     });
   }
   const roundNow = () => { const t = todayStr(); return roundsOf(live(data.sessions).filter((s) => s.date === t), data.timer); };
-  const rndText = () => { const r = roundNow(); if (r.emActive) return 'Emergency break · chain safe'; if (r.closed) return `Last round done · +${r.closed.pts}`; return r.done ? `Round ${r.k} · break due` : `Round ${r.k} · ${Math.floor(r.acc / 60)}/60 min`; };
+  const hhmm = (ms) => new Date(ms).toTimeString().slice(0, 5);
+  const rndText = () => {
+    const r = roundNow(), t = data.timer;
+    if (r.closed) return `Last round done · +${r.closed.pts}`;
+    if (r.emActive) return `Emergency break · chain safe · back by ${hhmm(r.lastEn + (ROUND_EM_MAX) * 1000)}`;
+    const base = r.done ? `Round ${r.k} · break due · ${short(r.acc)}` : `Round ${r.k} · ${Math.floor(r.acc / 60)}/60 min`;
+    if (r.done && r.lastEn && t && !isStudyTimer(t)) return `${base} · back by ${hhmm(r.lastEn + ROUND_RET * 1000)}`;
+    return base;
+  };
+  function lateAsk(l) {
+    choiceModal('Was that an emergency break?', `<p style="line-height:1.55">You came back after more than 15 minutes, so your chain (Round ${l.k}) would reset. If it was a shower, meal or something urgent, use your <b>once-per-chain emergency break</b> now and keep the chain.</p>`,
+      [{ label: 'No, reset my chain' }, { label: 'Yes, keep my chain', cls: 'primary', fn: () => { if (data.timer) { data.timer.emBefore = true; data.timerUpdatedAt = Date.now(); persist(true); render(); toast('Emergency break used. Chain kept.'); } } }]);
+  }
+  function rndInfo() {
+    const r = roundNow();
+    if (!r.parts.length) { toast('No study in this round yet'); return; }
+    const rows = r.parts.map((p) => `<li>${hhmm(p.st)} · ${short(p.sec)}${p.eb ? ' · after an emergency break' : ''}</li>`).join('');
+    choiceModal(`Round ${r.k}`, `<p style="line-height:1.55;margin-bottom:6px"><b>${short(r.acc)}</b> studied in this round.</p><ul style="padding-left:18px;line-height:1.6">${rows}</ul>
+      <p class="note" style="margin-top:8px">${r.lastEn ? `Last study ended ${hhmm(r.lastEn)}. ` : ''}Emergency break: ${r.emUsed ? 'used in this chain' : 'available'}.</p>`, [{ label: 'Close', cls: 'primary' }]);
+  }
   const lastToday = () => { const t = todayStr(); return live(data.sessions).some((x) => x.date === t && x.lastRound && kindOf(x.type) === 'study') || !!(data.timer && data.timer.lastRound); };
   const lastRoundOk = () => { const r = roundNow(); return !r.closed && r.acc >= ROUND_SEC / 2 && !lastToday(); };
   function lastRoundModal(sid) {
@@ -3825,6 +3858,10 @@
     if (isStudyTimer(t) && t.startedAt) {
       if (Date.now() < r.snooze || r.untilStop === t.id) return;
       if (roundNow().acc >= ROUND_SEC) roundDialog(t);
+    } else if ((t.emergency || t.roundBreak) && t.startedAt && !t.warned3) {
+      const rs = roundNow(), dl = rs.lastEn ? rs.lastEn + (t.emergency ? ROUND_EM_MAX : ROUND_RET) * 1000 : 0;
+      if (dl && rs.acc >= ROUND_SEC && Date.now() >= dl - 180000 && Date.now() < dl) { t.warned3 = true; persist(true); if (data.settings.sound !== false) ting(); toast('About 3 minutes left to keep your chain'); }
+      if ((t.emergency || (t.roundBreak && kindOf(t.type) === 'break')) && t.mode === 'countdown' && el >= t.targetSec && !t.backAsked) { t.backAsked = true; persist(true); if (data.settings.sound !== false) ting(); backDialog(); }
     } else if ((t.emergency || (t.roundBreak && kindOf(t.type) === 'break')) && t.mode === 'countdown' && t.startedAt && el >= t.targetSec && !t.backAsked) {
       t.backAsked = true; persist(true); if (data.settings.sound !== false) ting(); backDialog();
     }
@@ -4248,6 +4285,11 @@
     'last-round': () => lastRoundModal(null),
     'rules-toggle': () => { ui.rulesOpen = !rulesOpen(); try { localStorage.setItem('st-rules-open', ui.rulesOpen ? '1' : '0'); } catch (e) { /* private mode */ } render(); },
     'emergency': () => emergencyModal(),
+    'rnd-info': () => rndInfo(),
+    'need-longer': () => {
+      const t = data.timer, r = roundNow(); if (!t || !t.roundBreak || r.emUsed || r.closed) { toast('Emergency break is not available'); return; }
+      t.roundBreak = false; t.emergency = true; t.mode = 'countdown'; t.targetSec = ROUND_EM; t.backAsked = false; t.alerted = false; data.timerUpdatedAt = Date.now(); persist(true); render(); toast('Switched to your emergency break: 30 min, chain safe');
+    },
     'skip-break': () => skipBreak(),
     'switch-topic': () => {
       const t = data.timer; if (!t) return;
@@ -4563,6 +4605,6 @@
     bkInit();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { rndText, roundNow, APP_VERSION, get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
+    window.__st = { startTimer, rndText, roundNow, APP_VERSION, get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();
