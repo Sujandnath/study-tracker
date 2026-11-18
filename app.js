@@ -147,6 +147,8 @@
     for (const k of ['rest', 'checkins']) if (!d[k] || typeof d[k] !== 'object' || Array.isArray(d[k])) d[k] = {};
     if (!d.important || typeof d.important !== 'object' || Array.isArray(d.important)) d.important = {};
     if (!d.pointsCfg || typeof d.pointsCfg !== 'object' || Array.isArray(d.pointsCfg)) d.pointsCfg = { updatedAt: 0 };
+    d.pointsCfg.moveFrom = d.pointsCfg.moveFrom || todayStr(); // the Move goal starts paying the day it is first opened...
+    d.pointsCfg.movePenFrom = d.pointsCfg.movePenFrom || (todayStr() > '2026-11-18' ? todayStr() : '2026-11-18'); // ...and a day without a workout costs points from 18 Nov (or the day it is first opened, if later)
     d.pointsCfg.subjFrom = d.pointsCfg.subjFrom || todayStr(); // the daily every-subject goal starts counting the day it is first opened
     d.pointsCfg.blockFrom = d.pointsCfg.blockFrom || todayStr(); // blocks pay by length from the day this version is first opened
     d.pointsCfg.startDate = d.pointsCfg.startDate || todayStr(); // points start counting the day this version is first opened
@@ -510,7 +512,7 @@
       mode: spec.mode, targetSec: spec.mode === 'countdown' ? Math.round(spec.minutes * 60) : 0,
       accumulatedMs: 0, startedAt: Date.now(), startWall: Date.now(), comment: '', alerted: false,
       blockId: spec.blockId || null, planDate: spec.planDate || null, planSec: spec.mode === 'stopwatch' ? Math.round(spec.planSec || 0) : 0,
-      roundBreak: !!spec.roundBreak, emergency: !!spec.emergency
+      roundBreak: !!spec.roundBreak, emergency: !!spec.emergency, active: !!spec.active
     };
     data.timerUpdatedAt = Date.now();
     persist(true);
@@ -593,7 +595,7 @@
         id: sid, date: sessionDate(t.type, t.startWall, secs), start: t.startWall, seconds: secs,
         topic: name, type: t.type, priority: t.priority, comment: (t.comment || '').trim(),
         pausedSec: t.pauseSec || 0, pauses: t.pauseN || 0,
-        ...(t.lastRound ? { lastRound: true } : {}), ...(t.emergency ? { emergency: true } : {}), ...(t.skipBrk ? { skipBrk: true } : {}),
+        ...(t.lastRound ? { lastRound: true } : {}), ...(t.emergency ? { emergency: true } : {}), ...(t.active ? { active: true } : {}), ...(t.skipBrk ? { skipBrk: true } : {}),
         ...(t.blockId ? { blockId: t.blockId, planDate: t.planDate } : {})
       }));
       ensureTopic(t.topic, t.type, t.priority);
@@ -629,7 +631,7 @@
       </div>
       ${pr ? `<div class="fc-why"><span class="note">Last pause (${short(pr.seconds)}): what pulled you away?</span><div class="pask-c">${PAUSE_REASONS.map(([k, e, l]) => `<button class="${pr.reason === k ? 'on' : ''}" data-action="pause-reason" data-id="${pr.id}" data-v="${k}"><i>${e}</i>${l}</button>`).join('')}</div></div>` : ''}
       ${rate ? `<p class="note" style="margin:14px 0 8px">How focused were you?</p><div class="rate big">${[1, 2, 3, 4, 5].map((k) => `<button data-action="set-focus" data-id="${sid}" data-v="${k}"><b>${k}</b><span>${FOCUS_WORDS[k - 1]}</span></button>`).join('')}</div>` : ''}`,
-      [{ label: 'Stopped by mistake? Resume', fn: restore }, ...(!data.timer && roundNow().acc >= ROUND_SEC ? [{ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak }] : []), ...(!data.timer && lastRoundOk() ? [{ label: 'Last round: end chain', fn: () => lastRoundModal(sid) }] : []), ...(!data.timer && emergencyOk() ? [{ label: 'Emergency break', fn: emergencyModal }] : []), { label: rate ? 'Skip' : 'Done', cls: rate ? '' : 'primary' }]);
+      [{ label: 'Stopped by mistake? Resume', fn: restore }, ...(!data.timer && roundNow().acc >= ROUND_SEC ? [{ label: 'Active break', fn: () => takeRoundBreak(true) }, { label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak }] : []), ...(!data.timer && lastRoundOk() ? [{ label: 'Last round: end chain', fn: () => lastRoundModal(sid) }] : []), ...(!data.timer && emergencyOk() ? [{ label: 'Emergency break', fn: emergencyModal }] : []), { label: rate ? 'Skip' : 'Done', cls: rate ? '' : 'primary' }]);
     requestAnimationFrame(() => requestAnimationFrame(() => { const fg = $('#fc-fg'); if (fg) fg.style.strokeDashoffset = (C * (1 - score / 100)).toFixed(1); }));
   }
   function ensureTopic(name, type, priority) {
@@ -1946,6 +1948,29 @@
       <div class="sm-chips" style="margin-top:12px"><span>🔥 Streak <b>${streak()}</b> ${streak() === 1 ? 'day' : 'days'}</span><span>🏅 Longest <b>${bestRun}</b> ${bestRun === 1 ? 'day' : 'days'}</span><span>🎯 Goal reached <b>${hit}</b> of ${past} days</span><span>📅 Studied <b>${past ? Math.round(act / past * 100) : 0}%</b> of days</span></div></div>`;
   }
 
+  // workouts: this week, the Move goal, a streak and 8 weeks of minutes
+  function workoutCard() {
+    const v = ptv(), need = v.moveMin * 60, today = todayStr(), by = {}, cnt = {};
+    live(data.sessions).forEach((s) => { if (kindOf(s.type) !== 'study' && kindOf(s.type) !== 'sleep' && isWorkout(s)) { by[s.date] = (by[s.date] || 0) + s.seconds; cnt[s.date] = (cnt[s.date] || 0) + 1; } });
+    const ws = weekStart(today), days = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
+    const wkSec = days.reduce((n, d) => n + (by[d] || 0), 0), wkN = days.reduce((n, d) => n + (cnt[d] || 0), 0);
+    let hit = 0, counted = 0; days.forEach((d) => { if (d <= today && !isRest(d)) { counted++; if (need && (by[d] || 0) >= need) hit++; } });
+    let run = 0, d = today; if (!(need && (by[d] || 0) >= need)) d = addDays(d, -1);
+    for (let i = 0; i < 4000; i++) { if (need && (by[d] || 0) >= need) run++; else if (!streakSafe(d)) break; d = addDays(d, -1); }
+    const weeks = Array.from({ length: 8 }, (_, i) => { const a = addDays(ws, -7 * (7 - i)); return { a, sec: sumDays(by, a, 7) }; });
+    const anyW = weeks.some((x) => x.sec);
+    const dots = days.map((dd) => { const sec = by[dd] || 0, fut = dd > today; return `<i class="${fut ? 'f' : isRest(dd) && !sec ? 'r' : need && sec >= need ? 'h' : sec > 0 ? 'p' : ''}" title="${esc(fmtShort(dd))}: ${fut ? 'upcoming' : sec ? short(sec) : isRest(dd) ? 'rest day' : 'no workout'}"></i>`; }).join('');
+    const W = chartW(), H = 170, L = 40, R = 6, T = 14, B = 26, iw = W - L - R, ih = H - T - B, topM = Math.max(30, Math.ceil(Math.max(...weeks.map((x) => x.sec / 60)) / 30) * 30), y = (m) => T + ih - m / topM * ih, slot = iw / weeks.length, bw = Math.min(40, slot * .66);
+    let g = ''; for (let i = 0; i <= 3; i++) { const m = topM * i / 3, yy = y(m); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${Math.round(m)}m</text>`; }
+    weeks.forEach((x, i) => { const xx = L + slot * i + (slot - bw) / 2, m = x.sec / 60;
+      g += m > 0 ? `<rect x="${xx}" y="${y(m)}" width="${bw}" height="${Math.max(1, y(0) - y(m))}" rx="4" fill="#16a34a"><title>${esc(fmtShort(x.a))}: ${short(x.sec)}</title></rect>` : `<rect x="${xx}" y="${y(0) - 2}" width="${bw}" height="2" fill="#e2e8f0"/>`;
+      g += `<text x="${xx + bw / 2}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="#64748b">${esc(fmtShort(x.a))}</text>`; });
+    return `<div class="card"><h2>Workouts <small>Move goal ${v.moveMin} min a day</small></h2>
+      <div class="pg-stats"><div><b>${wkN}</b><span>${wkN === 1 ? 'session' : 'sessions'} this week</span></div><div><b>${short(wkSec)}</b><span>of workout this week</span></div><div><b>${hit}<small> / ${counted}</small></b><span>days Move goal reached</span></div><div><b>${run}<small> ${run === 1 ? 'day' : 'days'}</small></b><span>workout streak</span></div></div>
+      <div class="pg-dots" aria-label="Move goal reached on green days">${dots}</div>
+      ${anyW ? `<div class="pg-sub">Last 8 weeks, minutes of workout</div><div class="chart-wrap"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Workout minutes for each of the last 8 weeks">${g}</svg></div>` : '<p class="note" style="margin-top:12px">No workouts logged in the last 8 weeks. Log a session called "Home workout", or start an active break when a focus round ends.</p>'}</div>`;
+  }
+
   function pointsTrendCard(r, nDays) {
     if (nDays > 62) return '';
     const pts = computePoints(), vals = [];
@@ -2045,6 +2070,7 @@
         </div>
         ${pauseCard(r)}
         ${consistencyCard(studyMap)}
+        ${workoutCard()}
         ${pointsTrendCard(r, nDays)}
         ${tot.sleep && nDays <= 62 ? `<div class="card"><h2>Sleep <small>hours per night</small></h2><div class="chart-wrap">${barChart(r, perDay, nDays, ['sleep'])}</div></div>` : ''}
         ${recordsCard(studyMap, r)}
@@ -2168,8 +2194,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 45, APP_DATE = '17 Nov 2026';
+  const APP_VERSION = 46, APP_DATE = '18 Nov 2026';
   const CHANGELOG = [
+    [46, '18 Nov', 'Workout incentives: a daily Move goal (reward, and a penalty from 18 Nov), active breaks, a small study bonus on workout days, a Workouts card on Progress, and a search box for Points settings.'],
     [45, '17 Nov', 'New level ladder (10 levels, scaled to your pace) and a monthly season rank.'],
     [44, '17 Nov', 'Version number shown in Settings, and this Rules page.'],
     [43, '17 Nov', 'Emergency break (30 min, once per chain, keeps your chain) and Skip break.'],
@@ -2211,6 +2238,11 @@
         `Once per chain you can take a <b>30 minute</b> break for something that cannot wait (a shower, a meal, a call). Name it yourself. There are <b>5 minutes of grace</b>, so up to 35 minutes.`,
         `It does <b>not</b> break the chain. Mid-round your minutes are kept; after a full hour it counts as that round's break.`,
         `Only one per chain. It is available again once the chain resets. Over 35 minutes, the normal rules apply.`])}
+      ${sec('Workouts and the Move goal', [
+        `<b>Move goal:</b> <b>${v.moveMin} minutes</b> of workout in a day earns <b>+${v.move}</b>. A session counts when its name or category has workout, exercise, gym, yoga, fitness, walk, run, jog, stretch, cardio, cycling, swim or sport in it. Workout time also pays ${v.workout30} points per 30 minutes (up to ${v.workoutMax} blocks a day).`,
+        `A day without it costs <b>−${v.missMove}</b>, never on a rest day, from ${cfg.movePenFrom ? fmtLong(cfg.movePenFrom) : 'tomorrow'}. All penalties together are capped at −${v.cap} a day.`,
+        `<b>Fuel bonus:</b> on days you reach the Move goal, your study-minute points get <b>+${v.fuel}%</b>.`,
+        `<b>Active break:</b> when a focus round ends you can start a 10 minute <b>active break</b> (stretching, a walk, exercises) instead of a normal break. It counts as your break, earns <b>+${v.activeBrk}</b> when it lasts 8+ minutes (up to ${v.activeMax} a day), and its minutes count toward the Move goal.`])}
       ${sec('Routine logging', [
         `Logging routine activities (meals, shower and any category with a reward set) earns small points, up to <b>${v.routineCap} a day</b>. Set each category's reward and minimum time in Topics & Presets.`])}
       ${sec('Pauses', [
@@ -2927,9 +2959,9 @@
   // =====================================================================
   // a study block pays in proportion to its planned length: blockM is the price of 1 hour, capped at 3 hours (older days keep the flat price)
   const blockPtsFor = (d, b, v, cfg) => d >= (cfg.blockFrom || '0000-00-00') ? Math.min(v.blockM * 3, Math.max(1, Math.round(v.blockM * blockDur(b) / 60))) : v.blockM;
-  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, roundBase: 10, roundStep: 5, roundCap: 40, routineCap: 10, subjDay: 30, subjMin: 20, missSubject: 5, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
+  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, moveMin: 20, move: 40, missMove: 10, activeBrk: 5, activeMax: 3, fuel: 5, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, roundBase: 10, roundStep: 5, roundCap: 40, routineCap: 10, subjDay: 30, subjMin: 20, missSubject: 5, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
   const PT_LABELS = [
-    ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['meditate30', 'Meditation, per 30 minutes (paid per minute)'], ['meditateMax', 'Meditation: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
+    ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['moveMin', 'Move goal: minutes of workout in a day'], ['move', 'Move goal reached (workout)'], ['missMove', 'Move goal missed, no workout: penalty (not on rest days)'], ['activeBrk', 'Active break (8+ minutes of workout in a focus-round break): reward'], ['activeMax', 'Active break (workout): most counted per day'], ['fuel', 'Fuel bonus: percent extra on study-minute points on workout days (Move goal reached)'], ['meditate30', 'Meditation, per 30 minutes (paid per minute)'], ['meditateMax', 'Meditation: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
     ['blockM', 'Study block done: reward per hour of block length (30 min pays half, max 3 hours)'], ['routineCap', 'Routine logging (meals, shower…): maximum points per day'], ['roundBase', 'Focus round 2 reward (1h of study, then a break and back in 15 min)'], ['roundStep', 'Focus rounds: extra for each round after'], ['roundCap', 'Focus rounds: maximum reward'], ['subjDay', 'Every subject studied today: reward'], ['subjMin', 'Minutes of study per subject to count today'], ['missSubject', 'Subject skipped today: penalty each'],
     ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
@@ -2979,7 +3011,7 @@
     const t = tmap.get((s.topic || '').toLowerCase());
     return t && t.subjectId ? [t.subjectId] : [];
   }
-  const isWorkout = (s) => !isMeditation(s) && /workout|exercise|gym|yoga|fitness/i.test(cat(s.type).name + ' ' + s.topic);
+  const isWorkout = (s) => !!s.active || (!isMeditation(s) && /workout|exercise|gym|yoga|fitness|\b(walk|walking|run|running|jog|jogging|stretch|stretching|cardio|cycling|swim|swimming|sport|sports|hiit)\b/i.test(cat(s.type).name + ' ' + s.topic));
   function computePoints() {
     const cfg = data.pointsCfg, v = ptv(), today = todayStr(), now = Date.now();
     const start = cfg.startDate || today, goal = data.settings.dailyGoalMin * 60;
@@ -3030,7 +3062,8 @@
       (loanBy[d] || []).forEach((l) => { A += l.principal; debt += l.principal + l.fee; borrowed += l.principal + l.fee; }); // a loan adds spendable points only, never score
       const items = [];
       const add = (label, pts, kind) => { if (pts) items.push({ label, pts, kind }); };
-      add(`Study ${short(study)}`, Math.round(study / 60 * v.study30 / 30), 'earn'); // every minute counts
+      const studyPts = Math.round(study / 60 * v.study30 / 30);
+      add(`Study ${short(study)}`, studyPts, 'earn'); // every minute counts
       if (goal > 0 && study >= goal) add('Daily goal reached', v.goal, 'earn');
       if (goal > 0 && v.stretchMin * 60 > goal && study >= v.stretchMin * 60) add('Stretch goal reached', v.stretch, 'earn');
       { // planning bonus: within the window after you wake (longest sleep of the day); falls back to the fixed time if no sleep is logged
@@ -3046,6 +3079,11 @@
       if (isToday && tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isWorkout(tm)) wsec += tmElapsed;
       const wmin = Math.min(wsec / 60, v.workoutMax * 30), wpts = Math.round(wmin * v.workout30 / 30);
       if (wpts) add(`Workout ${short(wsec)}`, wpts, 'earn');
+      // Move goal: a workout of moveMin minutes (active breaks count). Reaching it pays, adds a small bonus on the day's study minutes, and skipping it costs points from movePenFrom.
+      const moveOn = v.moveMin > 0 && d >= (cfg.moveFrom || start), moved = moveOn && wsec >= v.moveMin * 60;
+      if (moved && v.move > 0) add('Move goal reached', v.move, 'earn');
+      if (moved && v.fuel > 0 && studyPts > 0) add(`Fuel bonus (${v.fuel}% on study)`, Math.round(studyPts * v.fuel / 100), 'earn');
+      { const nab = Math.min(v.activeMax, list.filter((s) => s.active && s.seconds >= 480).length); if (nab && v.activeBrk > 0) add(`${nab} active ${nab === 1 ? 'break' : 'breaks'}`, nab * v.activeBrk, 'earn'); }
       { let msec = list.filter((s) => kindOf(s.type) !== 'study' && kindOf(s.type) !== 'sleep' && isMeditation(s)).reduce((n, s) => n + s.seconds, 0);
         if (isToday && tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isMeditation(tm)) msec += tmElapsed;
         const mpts = Math.round(Math.min(msec / 60, v.meditateMax * 30) * v.meditate30 / 30);
@@ -3144,6 +3182,7 @@
         if (goal > 0 && study < goal && !boughtPass(d)) { const p = Math.round(v.missGoal * (1 - study / goal)); if (p) pens.push({ label: 'Missed daily goal', pts: -p }); }
         if (subMiss.length && v.missSubject > 0 && !boughtPass(d)) pens.push({ label: `${subMiss.length} ${subMiss.length === 1 ? 'subject' : 'subjects'} skipped`, pts: -subMiss.length * v.missSubject });
         if (missed) pens.push({ label: `${missed} missed ${missed === 1 ? 'block' : 'blocks'}`, pts: -missed * v.missBlock });
+        if (moveOn && !moved && v.missMove > 0 && d >= (cfg.movePenFrom || '9999-12-31') && !boughtPass(d)) pens.push({ label: 'No workout today', pts: -v.missMove });
       }
       const rawPen = pens.reduce((n, p) => n + p.pts, 0), pen = Math.max(rawPen, -v.cap);
       let penItems = pens.map((p) => ({ ...p, kind: 'pen' }));
@@ -3476,6 +3515,14 @@
           note: `${okn} of ${subs.length} subjects${need ? ` (${short(need)} each)` : ''}${v.missSubject > 0 ? ` · −${v.missSubject} for each one skipped when the day ends` : ''}`,
           chips: subs.map((x) => ({ n: ss.get(x.id) >= need ? x.name : `${x.name} · ${short(need - ss.get(x.id))} left`, ok: ss.get(x.id) >= need })), dn: `All ${subs.length} subjects studied today` });
       } }
+    // 8c. move goal
+    { const pc = data.pointsCfg;
+      if (v.moveMin > 0 && (v.move > 0 || v.missMove > 0) && today >= (pc.moveFrom || today)) {
+        const wsT = sess.filter((x) => kindOf(x.type) !== 'study' && kindOf(x.type) !== 'sleep' && isWorkout(x)).reduce((n, x) => n + x.seconds, 0) + (tm && kindOf(tm.type) !== 'study' && kindOf(tm.type) !== 'sleep' && isWorkout(tm) ? tmEl : 0);
+        const need = v.moveMin * 60, penOn = today >= (pc.movePenFrom || '9999-12-31'), pen = v.missMove > 0 && pc.penalties && !isRest(today);
+        push({ id: 'move', name: 'Move: workout', pts: v.move, state: wsT >= need ? 'done' : 'open', pct: Math.min(100, wsT / need * 100),
+          note: `${short(wsT)} of ${short(need)}${wsT < need ? ' · ' + more(need, wsT) : ''}${pen ? (penOn ? ` · −${v.missMove} if skipped when the day ends` : ` · the penalty starts ${fmtShort(pc.movePenFrom)}`) : isRest(today) ? ' · rest day: no penalty' : ''} · active breaks count${v.fuel ? ` · +${v.fuel}% on study points when done` : ''}`, dn: `Moved ${short(wsT)} today` });
+      } }
     // 9. every subject this week
     { const subs = live(data.subjects).filter((s) => !s.noWeekly && live(data.topics).some((t) => t.subjectId === s.id));
       if (subs.length && v.allSubjects > 0) {
@@ -3616,7 +3663,9 @@
         <div class="field"><label>Count points from</label><input type="date" data-change="pt-start" value="${cfg.startDate}" ${dis}></div>
         <div class="field"><label>Fallback planning time when no sleep is logged</label><input type="time" data-change="pt-planby" value="${esc(cfg.planBy || '08:00')}" ${dis}></div>
         <div class="field"><label class="chk"><input type="checkbox" data-change="pt-pen" ${cfg.penalties ? 'checked' : ''} ${dis}> Deduct points for missed goals and blocks</label></div>
-        <div class="pt-grid">${PT_LABELS.map(([k, l]) => `<label class="pt-set"><span>${l}</span><input type="number" min="0" step="1" data-change="pt-val" data-key="${k}" value="${v[k]}" ${dis}></label>`).join('')}</div>
+        <div class="field"><input type="search" id="pt-q" data-bind="pt-q" placeholder="Search points settings (for example: workout, block, penalty)" value="${esc(ui.rw.q || '')}" autocomplete="off"></div>
+        <div class="pt-grid">${PT_LABELS.filter(([k, l]) => { const q = (ui.rw.q || '').trim().toLowerCase(); return !q || (l + ' ' + k).toLowerCase().includes(q); }).map(([k, l]) => `<label class="pt-set" data-k="${k}"><span>${l}</span><input type="number" min="0" step="1" data-change="pt-val" data-key="${k}" value="${v[k]}" ${dis}></label>`).join('')}</div>
+        <p class="note" id="pt-none" ${PT_LABELS.some(([k, l]) => { const q = (ui.rw.q || '').trim().toLowerCase(); return !q || (l + ' ' + k).toLowerCase().includes(q); }) ? 'hidden' : ''}>No setting matches that search.</p>
         <div class="row" style="margin-top:12px"><button class="btn" data-action="pt-reset" ${dis}>Reset to defaults</button></div>
         <p class="note" style="margin-top:12px">Changing a value recalculates your whole history. Rest days (including ones you buy), skipped blocks, sleep and untracked gaps never cost points, and your score never goes below zero.</p>
         </div>
@@ -3733,9 +3782,9 @@
     const t = data.timer; if (!t || !(t.roundBreak || t.emergency)) return;
     t.skipBrk = true; backToStudy(); toast('Break skipped. Your round counts and the next one has started');
   }
-  function takeRoundBreak() {
+  function takeRoundBreak(active) {
     if (data.timer) stopTimer(true, { quiet: true });
-    startTimer({ type: 'break', topic: 'Break', mode: 'countdown', minutes: 10, roundBreak: true });
+    startTimer({ type: 'break', topic: active === true ? 'Active break' : 'Break', mode: 'countdown', minutes: 10, roundBreak: true, active: active === true });
     render();
   }
   function roundDialog(t) {
@@ -3747,6 +3796,7 @@
     btns.push({ label: 'Ask again in 10 min', fn: () => { r.snooze = Date.now() + 600000; } });
     if (lastRoundOk()) btns.push({ label: 'This is my last round', fn: () => lastRoundModal(null) });
     if (emergencyOk()) btns.push({ label: 'Emergency break (30 min)', fn: emergencyModal });
+    btns.push({ label: 'Active break (10 min, +' + ptv().activeBrk + ')', fn: () => takeRoundBreak(true) });
     btns.push({ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak });
     choiceModal(`${rs.k === 1 ? '1 hour' : 'Round ' + rs.k} of study done`, `
       <p style="line-height:1.55;margin-bottom:8px">You have studied <b>${short(rs.acc)}</b> this round. Take a <b>10 minute break</b>?</p>
@@ -4322,6 +4372,11 @@
 
   // live-typing handlers (no re-render, so inputs keep focus)
   const binds = {
+    'pt-q': (el) => { // filter the points settings as you type, without redrawing (so the cursor stays put)
+      ui.rw.q = el.value; const q = el.value.trim().toLowerCase(); let n = 0;
+      $$('.pt-set').forEach((x) => { const on = !q || (x.textContent + ' ' + (x.dataset.k || '')).toLowerCase().includes(q); x.style.display = on ? '' : 'none'; if (on) n++; });
+      const e = $('#pt-none'); if (e) e.hidden = n > 0;
+    },
     'f-topic': (el) => { ui.form.topic = el.value; },
     'm-calc': () => updateEnd(),
     'sl-calc': () => updateSleepSum(),
