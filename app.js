@@ -2198,8 +2198,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 57, APP_DATE = '18 Nov 2026';
+  const APP_VERSION = 58, APP_DATE = '18 Nov 2026';
   const CHANGELOG = [
+    [58, '23 Nov', 'Chain restore now works for Round 1 too and any time the same day; 10 points extra for each full hour away beyond the first.'],
     [57, '23 Nov', 'Focus chain card in Today’s goals (round timeline, records, emergency breaks) and chain restore: pay points to keep a chain you lost by up to 60 minutes.'],
     [56, '23 Nov', 'All three emergency breaks are 30 minutes each.'],
     [55, '22 Nov', 'Break now: take the focus-round break early. From 55 minutes the round counts as a full hour.'],
@@ -2246,7 +2247,7 @@
         `After a full hour, a break of <b>8+ minutes</b> ends the round. Come back within <b>15 minutes</b> and the next round starts: the chain continues. The break and the return only keep the chain; the reward is already yours.`,
         `Reward from round 2: <b>+${v.roundBase}</b>, then <b>+${v.roundStep}</b> more for each round, up to <b>+${v.roundCap}</b>. Round 1 pays nothing; it starts the chain. A round's reward depends on its number in the chain, and it is counted per day.`,
         `Away more than 15 minutes, whether after a full hour or in the middle of a round: the chain resets to Round 1 and the round's minutes are lost. A break of 8 to 15 minutes in the middle of a round keeps your minutes.`,
-        `<b>Restore your chain:</b> if you were away up to <b>60 minutes</b> after a full hour and your chain was Round 2 or higher, you can pay to keep it: <b>twice what the next round would pay</b> (at least 20, at most 80 points; ${restorePrice(2)} now for Round 2, ${restorePrice(5)} for Round 5). Once per day, and only if you have the points. You find it on the Focus chain card in Today’s goals, or in the question you get when you come back late. Undoing the purchase in Spent brings the chain loss back.`,
+        `<b>Restore your chain:</b> if you lose your chain after a full hour (any round, Round 1 too), you can pay to keep it, <b>any time the same day</b>. The price is <b>twice what the next round would pay</b> (at least 20), plus <b>10 for each full hour you were away beyond the first</b>, never more than 80 points: ${restorePrice(1, 30)} for Round 1, ${restorePrice(2, 30)} for Round 2, ${restorePrice(5, 30)} for Round 5 when you were away 30 minutes. Once per day, and only if you have the points. You find it on the Focus chain card in Today’s goals, or in the question you get when you come back late. Undoing the purchase in Spent brings the chain loss back.`,
         `<b>Skip break:</b> while a round break or emergency break is running you can skip it. After a full round it counts as taken, so the next round starts. Mid-round, skipping changes nothing.`])}
       ${sec('Last round', [
         `Finish a round early with <b>at least 30 minutes</b> in it and the topic marked complete. You are paid at once, in proportion to the time: 45 of 60 minutes pays 75% of that round's reward. No break is needed.`,
@@ -3723,8 +3724,9 @@
   const ROUND_EARLY = 3300, ROUND_EARLY_FROM = 2700; // 'Break now': counts as a full round from 55 min, offered from 45 min
   const ROUND_EM_N = 3, emLen = () => 1800, emMax = () => 2100, emGap = () => 3000;
   const emNowTest = (ems, last) => ems.some((t0) => t0 >= last - 120000);
-  const CHAIN_WIN = 3600; // a lost chain can be bought back if you were away at most 60 minutes
-  const restorePrice = (k) => Math.min(80, Math.max(20, 2 * roundPts(k + 1))); // twice what the next round would have paid
+  const CHAIN_WIN = 86400, LATE_ASK_WIN = 3600; // a lost chain can be bought back any time today; the question on return is asked up to 60 minutes late
+  // twice what the next round would have paid (20 to 80), plus 10 for each full hour away beyond the first (still at most 80)
+  const restorePrice = (k, gapMin) => Math.min(80, Math.max(20, 2 * roundPts(k + 1)) + 10 * Math.max(0, Math.floor((gapMin || 0) / 60) - 1));
   function roundsOf(sessList, tmLive) {
     const it = sessList.filter((s) => kindOf(s.type) === 'study' && s.seconds >= 60).map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000, last: !!s.lastRound, eb: !!s.emBefore, early: !!s.earlyBrk }));
     if (tmLive && kindOf(tmLive.type) === 'study') it.push({ st: tmLive.startWall, sec: Math.round(elapsedMs(tmLive) / 1000), en: Date.now(), last: !!tmLive.lastRound, eb: !!tmLive.emBefore });
@@ -3753,7 +3755,7 @@
           if (sk && emN < ROUND_EM_N && ems.some(inGap)) emN++; // pressed Emergency, then skipped: that emergency break is spent
           if (acc >= ROUND_SEC) {
             if (gap <= ROUND_RET || rt || cb) { rowRound(sk ? 'skip' : cb ? 'restored' : rt ? 'routine' : 'break'); k++; }
-            else { log.push({ t: 'end', k, why: 'late', last, at: x.st, gapMin: Math.round(gap / 60), restorable: k >= 2 && gap <= CHAIN_WIN }); k = 1; emN = 0; }
+            else { log.push({ t: 'end', k, why: 'late', last, at: x.st, gapMin: Math.round(gap / 60), restorable: gap <= CHAIN_WIN }); k = 1; emN = 0; }
           }
           else if (!sk && gap <= ROUND_RET) { /* a short break in the middle of a round: the minutes so far are kept */ }
           else { if (k >= 2) log.push({ t: 'end', k, why: 'mid', last, at: x.st, gapMin: Math.round(gap / 60), restorable: false }); acc = 0; parts = []; k = 1; emN = 0; } // a long break in the middle of a round also ends the chain
@@ -3773,9 +3775,9 @@
       const away = (Date.now() - last) / 1000;
       const rtNow = away <= ROUND_EM_MAX && rts.some((t0) => t0 >= last - 120000), cbNow = acc >= ROUND_SEC && away <= CHAIN_WIN && cbAt(last), emRun = emNowTest(ems, last);
       const canEm = emN < ROUND_EM_N && away <= emMax(emN);
-      if (acc >= ROUND_SEC && away > ROUND_RET && away <= CHAIN_WIN && !emRun && !rtNow && !cbNow && (canEm || k >= 2)) {
-        late = { k, acc, last, canEm, canBuy: k >= 2 };
-        if (k >= 2) log.push({ t: 'end', k, why: 'late', last, at: Date.now(), gapMin: Math.round(away / 60), restorable: true, now: true });
+      if (acc >= ROUND_SEC && away > ROUND_RET && !emRun && !rtNow && !cbNow) {
+        log.push({ t: 'end', k, why: 'late', last, at: Date.now(), gapMin: Math.round(away / 60), restorable: true, now: true });
+        if (away <= LATE_ASK_WIN) late = { k, acc, last, canEm, canBuy: true, gapMin: Math.round(away / 60) };
       }
       if (emN < ROUND_EM_N && away <= emGap(emN) && emRun) emN++; // an emergency break is running or has just finished: nothing resets yet
       else if ((rtNow || cbNow) && acc >= ROUND_SEC) { /* a logged shower or meal, or a bought-back chain: the chain is not reset yet */ }
@@ -3801,20 +3803,20 @@
     if (r.done && r.lastEn && t && !isStudyTimer(t)) return `${base} · back by ${hhmm(r.lastEn + ROUND_RET * 1000)}`;
     return base;
   };
-  function restoreChain(after, k) {
-    const pts = computePoints(), price = restorePrice(k), td = todayStr();
+  function restoreChain(after, k, gapMin) {
+    const pts = computePoints(), price = restorePrice(k, gapMin), td = todayStr();
     if (live(data.redemptions).some((x) => x.chainRestore && x.date === td)) { toast('You already restored a chain today'); return false; }
     if (pts.debt > 0) { toast(`Repay your loan first (you owe ${pts.debt})`); return false; }
     if (pts.A < price) { toast(`You need ${price} points to restore the chain (you have ${pts.A})`); return false; }
-    data.redemptions.push(touch({ id: uid(), rewardId: 'chain', name: `Chain restore (Round ${k})`, cost: price, date: td, chainRestore: true, after, k }));
+    data.redemptions.push(touch({ id: uid(), rewardId: 'chain', name: `Chain restore (Round ${k})`, cost: price, date: td, chainRestore: true, after, k, gapMin }));
     ptLog(`Chain restored for ${price} points (Round ${k})`);
     persist(true); render(); toast(`Chain restored for ${price} points. You are on Round ${k + 1}`);
     return true;
   }
   function lateAsk(l) {
-    const price = restorePrice(l.k), td = todayStr(), bought = live(data.redemptions).some((x) => x.chainRestore && x.date === td), A = computePoints().A;
+    const price = restorePrice(l.k, l.gapMin), td = todayStr(), bought = live(data.redemptions).some((x) => x.chainRestore && x.date === td), A = computePoints().A;
     const canBuy = l.canBuy && !bought && A >= price, btns = [{ label: 'No, reset my chain' }];
-    if (canBuy) btns.push({ label: `Restore chain · ${price} pts`, cls: l.canEm ? '' : 'primary', fn: () => restoreChain(l.last, l.k) });
+    if (canBuy) btns.push({ label: `Restore chain · ${price} pts`, cls: l.canEm ? '' : 'primary', fn: () => restoreChain(l.last, l.k, l.gapMin) });
     if (l.canEm) btns.push({ label: 'Yes, emergency (free)', cls: 'primary', fn: () => { if (data.timer) { data.timer.emBefore = true; data.timerUpdatedAt = Date.now(); persist(true); render(); toast('Emergency break used. Chain kept.'); } } });
     const why = l.canEm ? `If it was a shower, meal or something urgent, use one of your <b>emergency breaks</b> (free) and keep the chain.` : 'An emergency break cannot cover this much time.';
     const buy = l.canBuy ? (bought ? ' You already restored a chain today.' : A < price ? ` Restoring it costs ${price} points (you have ${A}).` : ` Or pay <b>${price} points</b> to restore it.`) : '';
@@ -3844,10 +3846,10 @@
     const endRow = r.log.slice().reverse().find((e) => e.t === 'end' && e.restorable);
     let box = '';
     if (endRow) {
-      const price = restorePrice(endRow.k), bought = live(data.redemptions).some((x) => x.chainRestore && x.date === td);
+      const price = restorePrice(endRow.k, endRow.gapMin), bought = live(data.redemptions).some((x) => x.chainRestore && x.date === td);
       if (bought) box = '<div class="ch-buy off"><span class="note">Chain restore already used today</span></div>';
       else if (pts.A < price) box = `<div class="ch-buy off"><span><b>Restore Round ${endRow.k}</b><br><span class="note">Costs ${price} points · you have ${pts.A}</span></span></div>`;
-      else box = `<div class="ch-buy"><span><b>Restore Round ${endRow.k}</b><br><span class="note">Back ${endRow.gapMin} min late · within 60 min · once a day</span></span><button class="btn sm" data-action="chain-restore" data-after="${endRow.last}" data-k="${endRow.k}">Restore · ${price} pts</button></div>`;
+      else box = `<div class="ch-buy"><span><b>Restore Round ${endRow.k}</b><br><span class="note">Back ${endRow.gapMin >= 120 ? Math.round(endRow.gapMin / 6) / 10 + ' h' : endRow.gapMin + ' min'} late · any time today · once a day</span></span><button class="btn sm" data-action="chain-restore" data-after="${endRow.last}" data-k="${endRow.k}" data-gap="${endRow.gapMin}">Restore · ${price} pts</button></div>`;
     }
     const btns = [];
     if (t && (t.roundBreak || t.emergency)) btns.push('<button class="btn sm primary" data-action="back-study">Back to studying</button>');
@@ -4387,8 +4389,8 @@
     'chain-fold': () => { try { localStorage.setItem('st-chain-open', chainOpen() ? '0' : '1'); } catch (e) { /* private mode */ } render(); },
     'back-study': () => backToStudy(),
     'chain-restore': (el) => {
-      const after = +el.dataset.after, k = +el.dataset.k, price = restorePrice(k);
-      choiceModal('Restore your chain?', `<p style="line-height:1.55">Pay <b>${price} points</b> to keep your chain after that late return. You will be on <b>Round ${k + 1}</b>. You can do this once a day.</p>`, [{ label: 'Cancel' }, { label: `Pay ${price} points`, cls: 'primary', fn: () => restoreChain(after, k) }]);
+      const after = +el.dataset.after, k = +el.dataset.k, gapMin = +el.dataset.gap, price = restorePrice(k, gapMin);
+      choiceModal('Restore your chain?', `<p style="line-height:1.55">Pay <b>${price} points</b> to keep your chain after that late return. You will be on <b>Round ${k + 1}</b>. You can do this once a day.</p>`, [{ label: 'Cancel' }, { label: `Pay ${price} points`, cls: 'primary', fn: () => restoreChain(after, k, gapMin) }]);
     },
     'break-now': () => {
       const t = data.timer, r = roundNow(); if (!t || !isStudyTimer(t) || r.done || r.acc < ROUND_EARLY_FROM) return;
