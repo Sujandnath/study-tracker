@@ -2198,8 +2198,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 55, APP_DATE = '18 Nov 2026';
+  const APP_VERSION = 56, APP_DATE = '18 Nov 2026';
   const CHANGELOG = [
+    [56, '23 Nov', 'All three emergency breaks are 30 minutes each.'],
     [55, '22 Nov', 'Break now: take the focus-round break early. From 55 minutes the round counts as a full hour.'],
     [54, '22 Nov', 'Emergency breaks: 3 per chain (the first 30 min, the 2nd and 3rd 20 min).'],
     [53, '18 Nov', 'Focus rounds final check: Rules wording fixed (a break only ends a round after a full hour). No behaviour change.'],
@@ -2249,10 +2250,10 @@
         `Finish a round early with <b>at least 30 minutes</b> in it and the topic marked complete. You are paid at once, in proportion to the time: 45 of 60 minutes pays 75% of that round's reward. No break is needed.`,
         `It ends the chain for the day and can be used <b>once a day</b>. Studying again later starts a new chain at Round 1.`])}
       ${sec('Emergency break', [
-        `Up to <b>3 times per chain</b> you can take a break for something that cannot wait (a shower, a meal, a call). Name it yourself. The first is <b>30 minutes</b>, the 2nd and 3rd are <b>20 minutes</b>, each with <b>5 minutes of grace</b>.`,
+        `Up to <b>3 times per chain</b> you can take a break for something that cannot wait (a shower, a meal, a call). Name it yourself. Each one is <b>30 minutes</b> with <b>5 minutes of grace</b>.`,
         `It does <b>not</b> break the chain. Mid-round your minutes are kept; after a full hour it counts as that round's break.`,
         `You get all three back when the chain resets. Over the limit, the normal rules apply.`,
-        `Minutes before and after the emergency break that you did not log are forgiven, up to 50 minutes (first break) or 40 minutes (2nd and 3rd) in total from your last study to the next.`,
+        `Minutes before and after the emergency break that you did not log are forgiven, up to 50 minutes in total from your last study to the next.`,
         `<b>Need longer?</b> On a running 10 minute break, tap it to turn it into your emergency break. If you come back 15 to 35 minutes late and you still have emergency breaks left, the app asks if it was an emergency.`,
         `A logged <b>shower or meal</b> (a routine category) between rounds also allows up to 30 minutes without using one of your emergency breaks.`,
         `The round pill shows your real round time and the <b>back by</b> time; tap it for the breakdown.`])}
@@ -3714,10 +3715,10 @@
   // =====================================================================
   const ROUND_SEC = 3600, ROUND_BRK = 480, ROUND_RET = 900, ROUND_EM = 1800, ROUND_EM_MAX = 2100; // emergency break: 30 min, plus 5 minutes' grace
   const roundPts = (k) => { const v = ptv(); return k >= 2 && v.roundBase > 0 ? Math.min(v.roundCap, v.roundBase + v.roundStep * (k - 2)) : 0; };
-  // emergency breaks: 3 per chain. The first is 30 min (35 with grace), the 2nd and 3rd are 20 min (25 with grace). 'Gap' = door to door, so a few unlogged minutes around the break are forgiven.
+  // emergency breaks: 3 per chain, each 30 min (35 with grace). 'Gap' = door to door, so a few unlogged minutes around the break are forgiven.
   const emLabel = () => { const n = roundNow().emN; return `Emergency break (${emLen(n) / 60} min, ${ROUND_EM_N - n} left)`; };
   const ROUND_EARLY = 3300, ROUND_EARLY_FROM = 2700; // 'Break now': counts as a full round from 55 min, offered from 45 min
-  const ROUND_EM_N = 3, emLen = (n) => (n === 0 ? 1800 : 1200), emMax = (n) => (n === 0 ? 2100 : 1500), emGap = (n) => (n === 0 ? 3000 : 2400);
+  const ROUND_EM_N = 3, emLen = () => 1800, emMax = () => 2100, emGap = () => 3000;
   const emNowTest = (ems, last) => ems.some((t0) => t0 >= last - 120000);
   function roundsOf(sessList, tmLive) {
     const it = sessList.filter((s) => kindOf(s.type) === 'study' && s.seconds >= 60).map((s) => ({ st: s.start, sec: s.seconds, en: s.start + (s.seconds + (s.pausedSec || 0)) * 1000, last: !!s.lastRound, eb: !!s.emBefore, early: !!s.earlyBrk }));
