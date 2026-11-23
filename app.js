@@ -2198,8 +2198,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 58, APP_DATE = '18 Nov 2026';
+  const APP_VERSION = 59, APP_DATE = '18 Nov 2026';
   const CHANGELOG = [
+    [59, '23 Nov', 'A round with 55+ minutes of study counts as a full hour as soon as you take a break of 8+ minutes, with or without the Break now button.'],
     [58, '23 Nov', 'Chain restore now works for Round 1 too and any time the same day; 10 points extra for each full hour away beyond the first.'],
     [57, '23 Nov', 'Focus chain card in Today’s goals (round timeline, records, emergency breaks) and chain restore: pay points to keep a chain you lost by up to 60 minutes.'],
     [56, '23 Nov', 'All three emergency breaks are 30 minutes each.'],
@@ -2243,7 +2244,7 @@
         `Weekly: studying every subject during a week earns <b>+${v.allSubjects}</b>.`])}
       ${sec('Focus rounds', [
         `<b>60 minutes</b> of study, across any topics or blocks, is one round. Pauses do not count as breaks. A round pays <b>the moment its hour is done</b>.`,
-        `<b>Break now:</b> from <b>45 minutes</b> into a round you can take the break early. From <b>55 minutes</b> the round counts as a full hour (and pays); before that it is a normal mid-round break and your minutes are kept.`,
+        `<b>55 minutes is enough:</b> if a round has <b>55 minutes or more</b> of study and you then take a break of 8 minutes or more, it counts as a full hour (and pays). The <b>Break now</b> button, offered from 45 minutes, starts that break for you. Before 55 minutes it is a normal mid-round break and your minutes are kept.`,
         `After a full hour, a break of <b>8+ minutes</b> ends the round. Come back within <b>15 minutes</b> and the next round starts: the chain continues. The break and the return only keep the chain; the reward is already yours.`,
         `Reward from round 2: <b>+${v.roundBase}</b>, then <b>+${v.roundStep}</b> more for each round, up to <b>+${v.roundCap}</b>. Round 1 pays nothing; it starts the chain. A round's reward depends on its number in the chain, and it is counted per day.`,
         `Away more than 15 minutes, whether after a full hour or in the middle of a round: the chain resets to Round 1 and the round's minutes are lost. A break of 8 to 15 minutes in the middle of a round keeps your minutes.`,
@@ -3744,6 +3745,7 @@
       closed = null;
       if (last !== null) {
         const gap = (x.st - last) / 1000, inGap = (t0) => t0 >= last - 120000 && t0 < x.st;
+        if (gap >= ROUND_BRK && acc >= ROUND_EARLY && acc < ROUND_SEC) { acc = ROUND_SEC; if (!paid) { paid = true; doneN++; const p = roundPts(k); if (p) events.push({ k, pts: p }); } } // 55+ minutes followed by a break counts as a full round
         const em = emN < ROUND_EM_N && gap >= ROUND_BRK && ((gap <= emGap(emN) && ems.some(inGap)) || (gap <= emMax(emN) && x.eb));
         const rt = !em && gap >= ROUND_BRK && gap <= ROUND_EM_MAX && rts.some(inGap); // a logged shower/meal between rounds: up to 30 min, emergency break not used
         const cb = !em && !rt && acc >= ROUND_SEC && gap >= ROUND_BRK && gap <= CHAIN_WIN && cbAt(last); // a bought-back chain
@@ -3773,6 +3775,7 @@
     let late = null;
     if (last !== null && !(tmLive && kindOf(tmLive.type) === 'study')) {
       const away = (Date.now() - last) / 1000;
+      if (away >= ROUND_BRK && acc >= ROUND_EARLY && acc < ROUND_SEC) { acc = ROUND_SEC; if (!paid) { paid = true; doneN++; const p = roundPts(k); if (p) events.push({ k, pts: p }); } } // same rule while you are away
       const rtNow = away <= ROUND_EM_MAX && rts.some((t0) => t0 >= last - 120000), cbNow = acc >= ROUND_SEC && away <= CHAIN_WIN && cbAt(last), emRun = emNowTest(ems, last);
       const canEm = emN < ROUND_EM_N && away <= emMax(emN);
       if (acc >= ROUND_SEC && away > ROUND_RET && !emRun && !rtNow && !cbNow) {
