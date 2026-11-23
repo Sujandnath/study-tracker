@@ -2227,8 +2227,10 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 60, APP_DATE = '18 Nov 2026';
+  const APP_VERSION = 62, APP_DATE = '23 Nov 2026';
   const CHANGELOG = [
+    [62, '23 Nov', 'Focus chain card: the Restore offer now only appears for the chain that ended most recently, not for an older one from earlier in the day.'],
+    [61, '23 Nov', 'Every subject today now has a 3-minute grace: a subject within 3 minutes of its target counts as done (no −5, and it can earn the bonus).'],
     [60, '23 Nov', 'Choose a subject when you start studying: the subjects fan out on click, then the app recommends which topic of that subject to do next.'],
     [59, '23 Nov', 'A round with 55+ minutes of study counts as a full hour as soon as you take a break of 8+ minutes, with or without the Break now button.'],
     [58, '23 Nov', 'Chain restore now works for Round 1 too and any time the same day; 10 points extra for each full hour away beyond the first.'],
@@ -2269,7 +2271,7 @@
         `A block pays <b>${v.blockM} points per hour</b> of its length: 30 minutes pays half, 2 hours pays double, and the most one block pays is <b>${v.blockM * 3}</b> (3 hours). This applies from ${cfg.blockFrom ? fmtLong(cfg.blockFrom) : 'today'}; earlier days paid a flat ${v.blockM}.`,
         `A planned study block you did not study at all, once its time has passed, costs <b>−${v.missBlock}</b>. Skipped blocks are ignored. Finishing every planned block (2 or more) earns <b>+${v.noMiss}</b>.`])}
       ${sec('Every subject, every day', [
-        `Study <b>every subject</b> (each with topics, except those switched off for weekly) for at least <b>${v.subjMin} minutes</b> in a day and you earn <b>+${v.subjDay}</b>.`,
+        `Study <b>every subject</b> (each with topics, except those switched off for weekly) for at least <b>${v.subjMin} minutes</b> (3 minutes short still counts) in a day and you earn <b>+${v.subjDay}</b>.`,
         `Each subject you skip costs <b>−${v.missSubject}</b> at the end of the day. This counts from ${cfg.subjFrom ? fmtLong(cfg.subjFrom) : 'today'}.`,
         `Weekly: studying every subject during a week earns <b>+${v.allSubjects}</b>.`])}
       ${sec('Focus rounds', [
@@ -3225,7 +3227,7 @@
         const ss = new Map(subs.map((x) => [x.id, 0]));
         list.forEach((x) => weeklySubjectIds(x, tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + x.seconds); }));
         if (isToday && tm) weeklySubjectIds(tm, tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + tmElapsed); });
-        subMiss = subs.filter((x) => ss.get(x.id) < v.subjMin * 60);
+        subMiss = subs.filter((x) => ss.get(x.id) < subjNeed(v));
         if (!subMiss.length && v.subjDay > 0) add('Every subject studied today', v.subjDay, 'earn');
       }
       const earned = items.reduce((n, i) => n + i.pts, 0);
@@ -3563,9 +3565,9 @@
         const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t])), ss = new Map(subs.map((x) => [x.id, 0]));
         sess.forEach((x) => weeklySubjectIds(x, tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + x.seconds); }));
         if (tm) weeklySubjectIds(tm, tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + tmEl); });
-        const need = v.subjMin * 60, okn = subs.filter((x) => ss.get(x.id) >= need).length, miss = subs.filter((x) => ss.get(x.id) < need);
+        const need = subjNeed(v), okn = subs.filter((x) => ss.get(x.id) >= need).length, miss = subs.filter((x) => ss.get(x.id) < need);
         push({ id: 'subjday', name: 'Every subject today', pts: v.subjDay, state: !miss.length ? 'done' : 'open', pct: okn / subs.length * 100,
-          note: `${okn} of ${subs.length} subjects${need ? ` (${short(need)} each)` : ''}${v.missSubject > 0 ? ` · −${v.missSubject} for each one skipped when the day ends` : ''}`,
+          note: `${okn} of ${subs.length} subjects${need ? ` (${v.subjMin} min each, ${SUBJ_GRACE / 60} min grace)` : ''}${v.missSubject > 0 ? ` · −${v.missSubject} for each one skipped when the day ends` : ''}`,
           chips: subs.map((x) => ({ n: ss.get(x.id) >= need ? x.name : `${x.name} · ${short(need - ss.get(x.id))} left`, ok: ss.get(x.id) >= need })), dn: `All ${subs.length} subjects studied today` });
       } }
     // 8c. move goal
@@ -3826,6 +3828,7 @@
       return { c, n: Math.min(have, c.earn.max || 1), max: c.earn.max || 1 };
     });
   }
+  const SUBJ_GRACE = 180, subjNeed = (v) => v.subjMin >= 10 ? v.subjMin * 60 - SUBJ_GRACE : v.subjMin * 60; // a subject within 3 minutes of its target still counts
   const roundNow = () => { const t = todayStr(); return roundsOf(live(data.sessions).filter((s) => s.date === t), data.timer); };
   const hhmm = (ms) => new Date(ms).toTimeString().slice(0, 5);
   const rndText = () => {
@@ -3876,7 +3879,7 @@
     else sub = r.lastEn ? `Last study ended ${hhmm(r.lastEn)}` : 'Study 60 minutes to start your chain';
     const nowRow = `<div class="n">Round ${r.k} · ${r.done ? 'hour done' : Math.floor(r.acc / 60) + '/60 min'}<small>${sub}</small></div>`;
     const dots = Array.from({ length: ROUND_EM_N }, (_, i) => `<b class="${i < r.emN ? 'off' : ''}"></b>`).join('');
-    const endRow = r.log.slice().reverse().find((e) => e.t === 'end' && e.restorable);
+    const lastLog = r.log[r.log.length - 1], endRow = lastLog && lastLog.t === 'end' && lastLog.restorable ? lastLog : null; // only the chain that ended most recently can be restored; once you have studied again, an older loss is history
     let box = '';
     if (endRow) {
       const price = restorePrice(endRow.k, endRow.gapMin), bought = live(data.redemptions).some((x) => x.chainRestore && x.date === td);
