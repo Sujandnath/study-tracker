@@ -913,3 +913,35 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
 .ch-buy.off { border-color: var(--line); background: var(--bg); color: var(--muted); }
 .ch-buy .btn { background: #f59e0b; border-color: #f59e0b; color: #fff; font-weight: 700; }
 .ch-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+/* ---------- Subject picker on the start card ---------- */
+.st-sbar-wrap { margin: 14px 0 4px; }
+.st-sbar { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; border: 1px solid var(--line); background: #fff; border-radius: 12px; padding: 10px 14px; font-weight: 700; font-size: 13.5px; color: var(--ink); transition: border-color .2s, background .2s, color .2s; }
+.st-sbar small { font-weight: 500; color: var(--muted); }
+.st-sbar i { font-style: normal; font-size: 10px; color: var(--faint); transition: transform .25s; }
+.st-sbar.on { border-color: var(--blue); background: var(--blue-soft); color: var(--blue); }
+.st-sbar.on i { transform: rotate(180deg); }
+.st-scards { display: flex; gap: 8px; overflow-x: auto; padding: 10px 2px 6px; scroll-snap-type: x proximity; }
+.st-scard { flex: none; min-width: 108px; text-align: left; border: 0; border-radius: 12px; padding: 11px 12px; color: #fff; background: var(--c); scroll-snap-align: start; display: flex; flex-direction: column; gap: 14px; font-size: 13px; text-shadow: 0 1px 2px rgba(0,0,0,.18); }
+.st-scard small { font-weight: 500; opacity: .92; font-size: 10.5px; }
+.st-scard:hover { filter: brightness(1.06); transform: translateY(-1px); }
+.st-scards.anim .st-scard { animation: scardIn .32s cubic-bezier(.2,.8,.3,1) both; animation-delay: var(--d, 0ms); }
+@keyframes scardIn { from { opacity: 0; transform: translateX(-18px) scale(.9); } to { opacity: 1; transform: none; } }
+.st-ssel { display: flex; align-items: center; gap: 10px; }
+.st-stag { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--c); background: #fff; color: var(--ink); border-radius: 99px; padding: 6px 6px 6px 12px; font-weight: 700; font-size: 13px; }
+.st-stag i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); }
+.st-stag button { border: 0; background: var(--blue-soft); color: var(--muted); width: 20px; height: 20px; border-radius: 50%; font-size: 10px; line-height: 1; }
+.st-recs { margin-top: 10px; }
+.st-rlbl { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 0 0 2px 2px; }
+.st-rec { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; text-align: left; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; margin-top: 6px; background: #fff; font-size: 13px; transition: border-color .15s, background .15s; }
+.st-rec b { font-weight: 700; }
+.st-rec small { display: block; color: var(--muted); font-size: 11px; }
+.st-rec.top { border-color: var(--blue-line); background: var(--blue-soft); }
+.st-rec.on { border-color: var(--blue); background: var(--blue-soft); box-shadow: 0 0 0 3px #dbeafe; }
+.st-rec:hover { border-color: var(--blue); }
+.st-recs.anim .st-rec { animation: recIn .3s ease-out both; animation-delay: var(--d, 0ms); }
+@keyframes recIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.st-rec .tag { font-size: 10.5px; font-weight: 800; padding: 2px 8px; border-radius: 99px; background: #fef3c7; color: #92400e; white-space: nowrap; }
+.st-rec .tag.b { background: var(--blue-soft); color: var(--blue); }
+.st-rec .tag.g { background: #ecfdf5; color: #047857; }
+@media (prefers-reduced-motion: reduce) { .st-scards.anim .st-scard, .st-recs.anim .st-rec { animation: none; } }

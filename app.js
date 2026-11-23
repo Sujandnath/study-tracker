@@ -513,8 +513,9 @@
       mode: spec.mode, targetSec: spec.mode === 'countdown' ? Math.round(spec.minutes * 60) : 0,
       accumulatedMs: 0, startedAt: Date.now(), startWall: Date.now(), comment: '', alerted: false,
       blockId: spec.blockId || null, planDate: spec.planDate || null, planSec: spec.mode === 'stopwatch' ? Math.round(spec.planSec || 0) : 0,
-      roundBreak: !!spec.roundBreak, emergency: !!spec.emergency, active: !!spec.active
+      roundBreak: !!spec.roundBreak, emergency: !!spec.emergency, active: !!spec.active, ...(spec.subjectId ? { subjectId: spec.subjectId } : {})
     };
+    if (spec === ui.form) { ui.form.subjectId = ''; ui.form.subjOpen = false; }
     data.timerUpdatedAt = Date.now();
     persist(true);
     ui.page = 'today'; ui.date = todayStr();
@@ -600,7 +601,7 @@
         ...(t.lastRound ? { lastRound: true } : {}), ...(t.emergency ? { emergency: true } : {}), ...(t.active ? { active: true } : {}), ...(t.skipBrk ? { skipBrk: true } : {}), ...(t.emBefore ? { emBefore: true } : {}), ...(t.earlyBrk ? { earlyBrk: true } : {}),
         ...(t.blockId ? { blockId: t.blockId, planDate: t.planDate } : {})
       }));
-      ensureTopic(t.topic, t.type, t.priority);
+      ensureTopic(t.topic, t.type, t.priority, t.subjectId);
       ui.date = sessionDate(t.type, t.startWall, secs);
       if (!quiet) toast(`Saved ${short(secs)} of ${name}`, restore);
       const after = () => {
@@ -636,11 +637,11 @@
       [{ label: 'Stopped by mistake? Resume', fn: restore }, ...(!data.timer && roundNow().acc >= ROUND_SEC ? [{ label: 'Active break', fn: () => takeRoundBreak(true) }, { label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak }] : []), ...(!data.timer && lastRoundOk() ? [{ label: 'Last round: end chain', fn: () => lastRoundModal(sid) }] : []), ...(!data.timer && emergencyOk() ? [{ label: emLabel(), fn: emergencyModal }] : []), { label: rate ? 'Skip' : 'Done', cls: rate ? '' : 'primary' }]);
     requestAnimationFrame(() => requestAnimationFrame(() => { const fg = $('#fc-fg'); if (fg) fg.style.strokeDashoffset = (C * (1 - score / 100)).toFixed(1); }));
   }
-  function ensureTopic(name, type, priority) {
+  function ensureTopic(name, type, priority, subjectId) {
     name = (name || '').trim();
     if (!name || kindOf(type) === 'break' || kindOf(type) === 'sleep') return;
     const ex = live(data.topics).find((x) => x.name.toLowerCase() === name.toLowerCase());
-    if (!ex) data.topics.push(touch({ id: uid(), name, type, priority }));
+    if (!ex) data.topics.push(touch({ id: uid(), name, type, priority, ...(subjectId && live(data.subjects).some((x) => x.id === subjectId) ? { subjectId } : {}) }));
   }
 
   // A soft bell: a few sine partials with a quick attack and a long, quiet decay.
@@ -1596,6 +1597,32 @@
     return out;
   }
   const stChips = (type) => recentTopics(type).map((t) => `<button class="st-chip" data-action="use-topic" data-v="${esc(t)}"><i style="background:${cat(type).color}"></i>${esc(t)}</button>`).join('');
+  // choose a subject before you start: it fans out on click, then suggests which topic of that subject to do next
+  function topicRecs(subjectId) {
+    const today = todayStr(), sess = live(data.sessions).filter((x) => kindOf(x.type) === 'study');
+    return live(data.topics).filter((t) => t.subjectId === subjectId && kindOf(t.type) === 'study').map((t) => {
+      const mine = sess.filter((x) => (x.topic || '').toLowerCase() === t.name.toLowerCase()).sort((a, b) => b.start - a.start), last = mine[0];
+      const days = last ? Math.max(0, Math.round((parseYmd(today) - parseYmd(last.date)) / 86400000)) : null;
+      const todaySec = mine.filter((x) => x.date === today).reduce((n, x) => n + x.seconds, 0), rated = mine.find((x) => x.focus >= 1 && x.focus <= 5), weak = !!rated && rated.focus <= 2;
+      let tag = '', cls = '', why, score;
+      if (todaySec > 0) { tag = 'Today'; cls = 'g'; why = `Done today · ${short(todaySec)}`; score = -100 + (days || 0); }
+      else if (!last) { tag = 'New'; cls = 'b'; why = 'Not studied yet'; score = 6; }
+      else { score = days + (weak ? 7 : 0); why = weak ? `Rated ${rated.focus}/5 last time` : days === 0 ? 'Studied earlier today' : days === 1 ? 'Studied yesterday' : `Not studied for ${days} days`; if (weak) { tag = 'Weak'; cls = 'b'; } else if (days >= 3) tag = 'Due'; }
+      return { name: t.name, why, tag, cls, score };
+    }).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  }
+  function subjBlockHtml() {
+    const f = ui.form, subs = live(data.subjects).sort((a, b) => a.name.localeCompare(b.name));
+    if (kindOf(f.type) !== 'study' || !subs.length) return '';
+    const sel = subs.find((x) => x.id === f.subjectId), anim = f.subjAnim ? ' anim' : ''; f.subjAnim = false;
+    const cnt = (id) => live(data.topics).filter((t) => t.subjectId === id && kindOf(t.type) === 'study').length;
+    if (!sel) return `<div class="st-sbar-wrap"><button class="st-sbar ${f.subjOpen ? 'on' : ''}" data-action="st-subj-toggle" aria-expanded="${!!f.subjOpen}"><span>＋ Choose a subject <small>(optional)</small></span><i>▼</i></button>
+      ${f.subjOpen ? `<div class="st-scards${anim}">${subs.map((x, i) => `<button class="st-scard" style="--c:${x.color};--d:${i * 50}ms" data-action="st-subj-pick" data-id="${x.id}"><b>${esc(x.name)}</b><small>${cnt(x.id)} topic${cnt(x.id) === 1 ? '' : 's'}</small></button>`).join('')}</div>` : ''}</div>`;
+    const recs = topicRecs(sel.id), cur = (f.topic || '').toLowerCase();
+    return `<div class="st-sbar-wrap"><div class="st-ssel"><span class="st-stag" style="--c:${sel.color}"><i></i>${esc(sel.name)}<button data-action="st-subj-clear" aria-label="Change subject">✕</button></span><small class="note">tap ✕ to change</small></div>
+      <div class="st-recs${anim}">${recs.length ? '<div class="st-rlbl">Recommended</div>' : ''}${recs.slice(0, 5).map((r, i) => `<button class="st-rec ${i === 0 ? 'top' : ''} ${cur === r.name.toLowerCase() ? 'on' : ''}" style="--d:${i * 55}ms" data-action="use-topic" data-v="${esc(r.name)}"><span><b>${esc(r.name)}</b><small>${i === 0 && r.score > -50 ? '⭐ Best next pick · ' : ''}${esc(r.why)}</small></span>${r.tag ? `<span class="tag ${r.cls}">${r.tag}</span>` : ''}</button>`).join('')}
+      ${recs.length > 5 ? `<div class="note" style="margin-top:6px">+ ${recs.length - 5} more: type to search</div>` : ''}${!recs.length ? '<div class="note">No topics in this subject yet. Type a name and it will be added here.</div>' : ''}</div></div>`;
+  }
   function startCardHtml() {
     const f = ui.form, fk = kindOf(f.type), topics = live(data.topics).filter((x) => x.type === f.type), presets = live(data.presets), [h, sub] = stTitle(fk);
     return `
@@ -1607,6 +1634,7 @@
           <kbd>↵ Start</kbd></div>
         <datalist id="topic-list">${topics.map((x) => `<option value="${esc(x.name)}"></option>`).join('')}</datalist>
         <div class="st-chips" id="st-recent">${stChips(f.type)}</div>
+        <div id="st-subj">${subjBlockHtml()}</div>
         <div class="st-lbl">Activity</div>
         <div class="st-tiles">${cats().map((x) => `<button class="st-tile ${f.type === x.id ? 'on' : ''}" data-action="set-type" data-v="${esc(x.id)}" style="--c:${x.color}"><span class="ic">${stIcon(catIconKey(x))}</span><span class="nm">${esc(x.name)}</span></button>`).join('')}</div>
         <div class="st-row">
@@ -1635,6 +1663,7 @@
     $('#st-start-t', root).textContent = startLabel();
     const rc = $('#st-recent', root); rc.classList.remove('swap'); void rc.offsetWidth; rc.innerHTML = stChips(f.type); rc.classList.add('swap');
     $('#topic-list', root).innerHTML = live(data.topics).filter((x) => x.type === f.type).map((x) => `<option value="${esc(x.name)}"></option>`).join('');
+    const sj = $('#st-subj', root); if (sj) sj.innerHTML = subjBlockHtml();
   }
 
   function logTable(list, ds) {
@@ -2198,8 +2227,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 59, APP_DATE = '18 Nov 2026';
+  const APP_VERSION = 60, APP_DATE = '18 Nov 2026';
   const CHANGELOG = [
+    [60, '23 Nov', 'Choose a subject when you start studying: the subjects fan out on click, then the app recommends which topic of that subject to do next.'],
     [59, '23 Nov', 'A round with 55+ minutes of study counts as a full hour as soon as you take a break of 8+ minutes, with or without the Break now button.'],
     [58, '23 Nov', 'Chain restore now works for Round 1 too and any time the same day; 10 points extra for each full hour away beyond the first.'],
     [57, '23 Nov', 'Focus chain card in Today’s goals (round timeline, records, emergency breaks) and chain restore: pay points to keep a chain you lost by up to 60 minutes.'],
@@ -4037,6 +4067,9 @@
       if (hit && hit.priority && kindOf(ui.form.type) !== 'break' && kindOf(ui.form.type) !== 'sleep') ui.form.priority = hit.priority;
       syncStartCard(); const i = $('#f-topic'); if (i) i.focus();
     },
+    'st-subj-toggle': () => { ui.form.subjOpen = !ui.form.subjOpen; ui.form.subjAnim = true; syncStartCard(); },
+    'st-subj-pick': (el) => { ui.form.subjectId = el.dataset.id; ui.form.subjOpen = false; ui.form.subjAnim = true; syncStartCard(); },
+    'st-subj-clear': () => { ui.form.subjectId = ''; ui.form.subjOpen = true; ui.form.subjAnim = true; syncStartCard(); },
     'use-preset': (el) => { const p = live(data.presets).find((x) => x.id === el.dataset.id); if (p) { applyPreset(p); syncStartCard(); toast(`Preset loaded: ${p.name}`); } },
     start: () => {
       const f = ui.form;
