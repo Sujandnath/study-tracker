@@ -235,7 +235,7 @@
   const ui = {
     page: 'today',
     date: todayStr(),
-    tt: { date: null, view: 'list', scope: 'onward', scrollNow: false },
+    tt: { date: null, view: (() => { try { return localStorage.getItem('st-tt-view') === 'list' ? 'list' : 'timeline'; } catch (e) { return 'timeline'; } })(), scope: 'onward', scrollNow: false, sugg: null },
     jr: { q: '', month: 'all' },
     donut: { mode: 'type', sel: null },
     imp: { text: false },
@@ -1051,7 +1051,7 @@
       perDay[d] = { study: ds.tot.study, break: ds.tot.break + ds.gapBreak, neutral: ds.tot.neutral, sleep: ds.tot.sleep };
       Object.keys(sum).forEach((k) => { sum[k] += perDay[d][k]; });
       if (d <= today) daysElapsed++;
-      if (goal && d <= today && ds.tot.study >= goal) goalDays++;
+      if (goalSecOn(d) && d <= today && ds.tot.study >= goalSecOn(d)) goalDays++;
       if (ds.tot.study > 0) activeDays++;
       if (ds.tot.sleep > 0) sleepNights++;
       if (isRest(d)) restDays++;
@@ -1213,7 +1213,7 @@
     const nSess = (name) => sd.sess.filter((s) => s.topic.toLowerCase() === name.toLowerCase()).length;
     let hero = '', sub = '', badge = '', bar = '', body = '';
     const barHtml = (items, tot) => `<div class="sm-bar">${items.filter((x) => x.sec > 0).map((x) => `<i style="flex:${x.sec};background:${x.color}" title="${esc(x.name)}"></i>`).join('') || '<i class="empty" style="flex:1"></i>'}</div>`;
-    const goalOk = goal && sd.study >= goal * Math.max(1, sd.days.filter((x) => x <= today).length);
+    const goalOk = goal && sd.study >= Math.max(goal, sd.days.filter((x) => x <= today).reduce((n, x) => n + goalSecOn(x), 0));
     if (tab === 'type' || tab === 'subject' || tab === 'topic') {
       const total = slicesAll.reduce((n, x) => n + x.sec, 0);
       const sl = tab === 'topic' ? slicesAll.map((x) => ({ ...x, n: x.name === 'Others' ? 0 : nSess(x.name) })) : slicesAll;
@@ -1470,7 +1470,7 @@
     const d = ui.date, isToday = d === todayStr();
     const list = sessionsOn(d);
     const ds = dayStats(d), tot = ds.tot;
-    const goal = data.settings.dailyGoalMin * 60;
+    const goal = goalSecOn(d);
     const pct = goal ? Math.min(100, tot.study / goal * 100) : 0;
     const journal = (data.journal[d] && data.journal[d].text) || '';
 
@@ -1794,6 +1794,36 @@
   const FOCUS_NAMES = ['Scattered', 'Distracted', 'Okay', 'Focused', 'Deep focus'];
   const studyDayMap = () => { const m = {}; live(data.sessions).forEach((s) => { if (kindOf(s.type) === 'study') m[s.date] = (m[s.date] || 0) + s.seconds; }); return m; };
   const sumDays = (m, from, n) => { let t = 0; for (let i = 0; i < n; i++) t += m[addDays(from, i)] || 0; return t; };
+  // Goal history: a new goal starts on a date and never touches earlier days. goalPlan = [{from, min, boost}], '' = the goal before the first change.
+  const goalEntry = (d) => { const gp = (data.settings.goalPlan || []).filter((e) => e && e.from <= d).sort((a, b) => (a.from < b.from ? -1 : 1)); return gp.length ? gp[gp.length - 1] : null; };
+  const goalMinOn = (d) => { const e = goalEntry(d); return e ? e.min : (data.settings.dailyGoalMin || 0); };
+  const goalSecOn = (d) => goalMinOn(d) * 60;
+  const goalBoostOn = (d) => { const e = goalEntry(d); return e && e.from ? Math.max(0, e.boost || 0) : 0; };
+  const refreshGoal = () => { if ((data.settings.goalPlan || []).length) data.settings.dailyGoalMin = goalMinOn(todayStr()); }; // dailyGoalMin always means the goal of today
+  function goalModal(min) {
+    const tm = addDays(todayStr(), 1);
+    openModal('New study goal', `
+      <p class="note" style="margin-bottom:12px">Your old goal stays on every earlier day, so past points, penalties and charts do not change. The new goal starts on the date you pick.</p>
+      <div class="row">
+        <div class="field grow"><label>New daily goal (minutes)</label><input type="number" id="g-min" min="0" max="1440" step="15" value="${min}"></div>
+        <div class="field grow"><label>Starts on</label><input type="date" id="g-from" min="${tm}" value="${tm}"></div>
+      </div>
+      <div class="field"><label>Points boost on those days (%)</label><input type="number" id="g-boost" min="0" max="100" step="5" value="10">
+        <div class="note" style="margin-top:6px">Study points and the daily-goal bonus are raised by this percent on every day this goal applies. 0 = no boost.</div></div>`,
+    () => {
+      const m = Math.max(0, Math.min(1440, parseInt($('#g-min').value, 10) || 0)), from = $('#g-from').value, boost = Math.max(0, Math.min(100, parseInt($('#g-boost').value, 10) || 0));
+      if (!from || from < tm) { toast('Pick tomorrow or a later date'); return false; }
+      const gp = (data.settings.goalPlan || []).slice();
+      if (!gp.length) gp.push({ from: '', min: data.settings.dailyGoalMin, boost: 0 });
+      data.settings.goalPlan = gp.filter((e) => e.from !== from).concat([{ from, min: m, boost }]);
+      touch(data.settings); persist(true); render(); toast(`New goal ${short(m * 60)} from ${fmtShort(from)}${boost ? `, +${boost}% points` : ''}`);
+    }, 'Save goal');
+  }
+  function goalListHtml() {
+    const gp = (data.settings.goalPlan || []).filter((e) => e.from).sort((a, b) => (a.from < b.from ? -1 : 1)), td = todayStr();
+    if (!gp.length) return '<p class="note" style="margin-top:6px">Changing the goal asks you when it should start, so earlier days keep theirs.</p>';
+    return `<div class="note" style="margin-top:8px">Goal changes:</div>${gp.map((e) => `<div class="list-row"><div class="grow"><div class="nm">${short(e.min * 60)} a day${e.boost ? ` · +${e.boost}% points` : ''}</div><div class="meta">${e.from > td ? 'starts' : 'since'} ${fmtLong(e.from)}</div></div>${e.from > td ? `<button class="btn sm danger" data-action="goal-del" data-from="${e.from}">Remove</button>` : ''}</div>`).join('')}`;
+  }
   const dailyGoalSec = () => (data.settings.dailyGoalMin || 0) * 60;
   const subjLookup = () => {
     const tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t])), smap = new Map(live(data.subjects).map((s) => [s.id, s]));
@@ -1811,9 +1841,9 @@
     let hit = 0, counted = 0, active = 0, best = null; const dots = [];
     for (let i = 0; i < nDays; i++) {
       const d = addDays(r.from, i), sec = m[d] || 0, rest = isRest(d), fut = d > today;
-      if (!fut && !rest) { counted++; if (goal && sec >= goal) hit++; }
+      if (!fut && !rest) { counted++; if (goalSecOn(d) && sec >= goalSecOn(d)) hit++; }
       if (sec > 0) { active++; if (!best || sec > best.sec) best = { d, sec }; }
-      dots.push(`<i class="${fut ? 'f' : rest ? 'r' : goal && sec >= goal ? 'h' : sec > 0 ? 'p' : ''}" title="${esc(fmtShort(d))}: ${fut ? 'upcoming' : rest ? 'rest day' : sec ? short(sec) : 'nothing'}"></i>`);
+      dots.push(`<i class="${fut ? 'f' : rest ? 'r' : goalSecOn(d) && sec >= goalSecOn(d) ? 'h' : sec > 0 ? 'p' : ''}" title="${esc(fmtShort(d))}: ${fut ? 'upcoming' : rest ? 'rest day' : sec ? short(sec) : 'nothing'}"></i>`);
     }
     return `<div class="card pg-hero">
       <div class="pg-top"><div><div class="sm-big">${cur ? short(cur) : '–'}</div><div class="sm-sub">studied ${partial ? 'so far' : 'in this period'}${prev ? ` · ${short(Math.abs(dl))} ${dl >= 0 ? 'more' : 'less'} than ${vs}${partial ? ' (same number of days)' : ''}` : ''}</div></div>
@@ -1831,10 +1861,10 @@
   // study hours per day (or per week for long ranges) with the daily goal drawn on it
   function goalChart(r, m, nDays) {
     const goal = dailyGoalSec(), today = todayStr(), weekly = nDays > 62, rest = data.settings.restPerWeek || 0, buckets = [];
-    if (!weekly) for (let i = 0; i < nDays; i++) { const d = addDays(r.from, i); buckets.push({ label: String(parseYmd(d).getDate()), tip: fmtShort(d), sec: m[d] || 0, goal, rest: isRest(d), fut: d > today }); }
+    if (!weekly) for (let i = 0; i < nDays; i++) { const d = addDays(r.from, i); buckets.push({ label: String(parseYmd(d).getDate()), tip: fmtShort(d), sec: m[d] || 0, goal: goalSecOn(d), rest: isRest(d), fut: d > today }); }
     else { let cur = r.from; while (cur <= r.to) { const end = addDays(cur, 6) > r.to ? r.to : addDays(cur, 6); let sec = 0; for (let d = cur; d <= end; d = addDays(d, 1)) sec += m[d] || 0; buckets.push({ label: fmtShort(cur), tip: `${fmtShort(cur)} – ${fmtShort(end)}`, sec, goal: goal * Math.max(1, Math.min(7, daysBetween(cur, end)) - (daysBetween(cur, end) >= 7 ? rest : 0)), rest: false, fut: cur > today }); cur = addDays(end, 1); } }
     const narrow = window.innerWidth <= 760, W = chartW(), H = narrow ? 230 : 250, L = narrow ? 40 : 46, R = 6, T = 12, B = 28, iw = W - L - R, ih = H - T - B;
-    const maxH = Math.max(1, ...buckets.map((b) => Math.max(b.sec, b.goal) / 3600)), top = Math.ceil(maxH * 1.04);
+    const varies = new Set(buckets.map((b) => b.goal)).size > 1, maxH = Math.max(1, ...buckets.map((b) => Math.max(b.sec, b.goal) / 3600)), top = Math.ceil(maxH * 1.04);
     const slot = iw / buckets.length, bw = Math.min(36, Math.max(3, slot * .64)), y = (h) => T + ih - (h / top) * ih;
     let g = '';
     for (let i = 0; i <= 4; i++) { const v = top * i / 4, yy = y(v); g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="#e2e8f0"/><text x="${L - 8}" y="${yy + 4}" text-anchor="end" font-size="11" fill="#94a3b8">${+v.toFixed(2)}h</text>`; }
@@ -1844,10 +1874,10 @@
       const tip = `${b.tip}: ${b.sec ? short(b.sec) : b.rest ? 'rest day' : 'nothing logged'}${b.goal ? ` · goal ${short(b.goal)}${ok ? ' ✓' : ''}` : ''}`;
       if (h > 0) g += `<rect x="${x}" y="${y(h)}" width="${bw}" height="${Math.max(1, y(0) - y(h))}" rx="3" fill="${ok ? '#16a34a' : '#2563eb'}" opacity="${b.fut ? .35 : 1}"><title>${esc(tip)}</title></rect>`;
       else g += `<rect x="${x}" y="${y(0) - 2}" width="${bw}" height="2" fill="${b.rest ? '#a5b4fc' : '#e2e8f0'}"><title>${esc(tip)}</title></rect>`;
-      if (weekly && b.goal) g += `<line x1="${x - 2}" x2="${x + bw + 2}" y1="${y(b.goal / 3600)}" y2="${y(b.goal / 3600)}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 3"/>`;
+      if ((weekly || varies) && b.goal) g += `<line x1="${x - 2}" x2="${x + bw + 2}" y1="${y(b.goal / 3600)}" y2="${y(b.goal / 3600)}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4 3"/>`;
       if (i % every === 0) g += `<text x="${x + bw / 2}" y="${H - 9}" text-anchor="middle" font-size="11" fill="#64748b">${esc(b.label)}</text>`;
     });
-    if (!weekly && goal) g += `<line x1="${L}" x2="${W - R}" y1="${y(goal / 3600)}" y2="${y(goal / 3600)}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 4"/><text x="${W - R}" y="${y(goal / 3600) - 5}" text-anchor="end" font-size="11" font-weight="700" fill="#d97706">goal ${short(goal)}</text>`;
+    if (!weekly && goal && !varies) g += `<line x1="${L}" x2="${W - R}" y1="${y(goal / 3600)}" y2="${y(goal / 3600)}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="6 4"/><text x="${W - R}" y="${y(goal / 3600) - 5}" text-anchor="end" font-size="11" font-weight="700" fill="#d97706">goal ${short(goal)}</text>`;
     return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Study per ${weekly ? 'week' : 'day'} against your goal">${g}</svg>`;
   }
 
@@ -1967,7 +1997,7 @@
     let g = '', hit = 0, act = 0, past = 0, lastMonth = -1, lastCol = -9;
     for (let c = 0; c < N; c++) for (let rw = 0; rw < 7; rw++) {
       const d = addDays(start, c * 7 + rw); if (d > today) continue;
-      const sec = m[d] || 0, ratio = sec / goal, lvl = sec <= 0 ? 0 : ratio < .25 ? 1 : ratio < .6 ? 2 : ratio < 1 ? 3 : 4; past++; if (sec > 0) act++; if (sec >= goal) hit++;
+      const gd = goalSecOn(d) || 4 * 3600, sec = m[d] || 0, ratio = sec / gd, lvl = sec <= 0 ? 0 : ratio < .25 ? 1 : ratio < .6 ? 2 : ratio < 1 ? 3 : 4; past++; if (sec > 0) act++; if (sec >= gd) hit++;
       g += `<rect x="${LP + c * (C + G)}" y="${TP + rw * (C + G)}" width="${C}" height="${C}" rx="3" fill="${cols[lvl]}" ${isRest(d) ? 'stroke="#94a3b8" stroke-dasharray="2 2"' : ''} data-action="goto-day" data-date="${d}" style="cursor:pointer"><title>${esc(fmtLong(d))}: ${sec ? short(sec) : isRest(d) ? 'rest day' : 'nothing'}</title></rect>`;
     }
     for (let c = 0; c < N; c++) { const mo = parseYmd(addDays(start, c * 7)).getMonth(); if (mo !== lastMonth) { lastMonth = mo; if (c - lastCol < 3 && lastCol >= 0) continue; lastCol = c; g += `<text x="${LP + c * (C + G)}" y="10" font-size="10.5" fill="#64748b">${parseYmd(addDays(start, c * 7)).toLocaleDateString('en-IN', { month: 'short' })}</text>`; } }
@@ -2186,7 +2216,7 @@
     h += '<div class="blank"></div>'.repeat(lead);
     const n = daysBetween(r.from, r.to);
     for (let i = 0; i < n; i++) {
-      const d = addDays(r.from, i), sec = (perDay[d] || {}).study || 0, ratio = sec / goal;
+      const d = addDays(r.from, i), sec = (perDay[d] || {}).study || 0, ratio = sec / (goalSecOn(d) || 4 * 3600);
       const lvl = sec <= 0 ? 0 : ratio < 0.25 ? 1 : ratio < 0.6 ? 2 : ratio < 1 ? 3 : 4;
       h += `<div class="day l${lvl} ${d > today ? 'future' : ''} ${d === today ? 'is-today' : ''} ${isRest(d) ? 'rest' : ''}" data-action="goto-day" data-date="${d}" title="${fmtLong(d)}: ${short(sec)} study${isRest(d) ? ' (rest day)' : ''}">
         <span class="n">${parseYmd(d).getDate()}</span><span class="t">${sec ? short(sec) : isRest(d) ? 'Rest' : ''}</span></div>`;
@@ -2227,8 +2257,11 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 62, APP_DATE = '23 Nov 2026';
+  const APP_VERSION = 65, APP_DATE = '23 Nov 2026';
   const CHANGELOG = [
+    [65, '24 Nov', 'New study goals start on a date you choose, so past days keep their goal. A new goal can carry a points boost (default +10%) on the days it applies.'],
+    [64, '24 Nov', 'Timetable: Timeline is now the default view. Tap a block to start it, mark it done, skip it or change its length (15m, 30m, 1h, 2h). Block length buttons in the editor, and the length shows when you hover a block. New Suggest plan button (today only).'],
+    [63, '23 Nov', 'You can now buy back a chain you closed yourself with Last round (Reopen the chain on the Focus chain card).'],
     [62, '23 Nov', 'Focus chain card: the Restore offer now only appears for the chain that ended most recently, not for an older one from earlier in the day.'],
     [61, '23 Nov', 'Every subject today now has a 3-minute grace: a subject within 3 minutes of its target counts as done (no −5, and it can earn the bonus).'],
     [60, '23 Nov', 'Choose a subject when you start studying: the subjects fan out on click, then the app recommends which topic of that subject to do next.'],
@@ -2265,6 +2298,7 @@
       ${sec('Studying and your goal', [
         `Only <b>study</b> counts as study: toward your goal, your subjects and your streak. Other activities are logged but do not count.`,
         `Study pays <b>${v.study30} points per 30 minutes</b> (per minute). Reaching your daily goal (${short(st.dailyGoalMin * 60)}) earns <b>+${v.goal}</b>.`,
+        ...(st.goalPlan || []).filter((e) => e.from).sort((a, b) => (a.from < b.from ? -1 : 1)).map((e) => `From <b>${fmtLong(e.from)}</b> your goal is <b>${short(e.min * 60)}</b>${e.boost ? ` and study points and the goal bonus get <b>+${e.boost}%</b> on those days` : ''}. Earlier days keep their own goal.`),
         `A rest day or a streak shield does not break your streak.`])}
       ${sec('Timetable blocks', [
         `A block counts as done when you study <b>90%</b> of its planned length, or when you mark it complete.`,
@@ -2280,7 +2314,7 @@
         `After a full hour, a break of <b>8+ minutes</b> ends the round. Come back within <b>15 minutes</b> and the next round starts: the chain continues. The break and the return only keep the chain; the reward is already yours.`,
         `Reward from round 2: <b>+${v.roundBase}</b>, then <b>+${v.roundStep}</b> more for each round, up to <b>+${v.roundCap}</b>. Round 1 pays nothing; it starts the chain. A round's reward depends on its number in the chain, and it is counted per day.`,
         `Away more than 15 minutes, whether after a full hour or in the middle of a round: the chain resets to Round 1 and the round's minutes are lost. A break of 8 to 15 minutes in the middle of a round keeps your minutes.`,
-        `<b>Restore your chain:</b> if you lose your chain after a full hour (any round, Round 1 too), you can pay to keep it, <b>any time the same day</b>. The price is <b>twice what the next round would pay</b> (at least 20), plus <b>10 for each full hour you were away beyond the first</b>, never more than 80 points: ${restorePrice(1, 30)} for Round 1, ${restorePrice(2, 30)} for Round 2, ${restorePrice(5, 30)} for Round 5 when you were away 30 minutes. Once per day, and only if you have the points. You find it on the Focus chain card in Today’s goals, or in the question you get when you come back late. Undoing the purchase in Spent brings the chain loss back.`,
+        `<b>Restore your chain:</b> if you lose your chain after a full hour (any round, Round 1 too), you can pay to keep it, <b>any time the same day</b>. The price is <b>twice what the next round would pay</b> (at least 20), plus <b>10 for each full hour you were away beyond the first</b>, never more than 80 points: ${restorePrice(1, 30)} for Round 1, ${restorePrice(2, 30)} for Round 2, ${restorePrice(5, 30)} for Round 5 when you were away 30 minutes. Once per day, and only if you have the points. You find it on the Focus chain card in Today’s goals, or in the question you get when you come back late. This also works on a chain you closed yourself with Last round ("Reopen the chain"): you carry on to the next round. Undoing the purchase in Spent brings the chain loss back.`,
         `<b>Skip break:</b> while a round break or emergency break is running you can skip it. After a full round it counts as taken, so the next round starts. Mid-round, skipping changes nothing.`])}
       ${sec('Last round', [
         `Finish a round early with <b>at least 30 minutes</b> in it and the topic marked complete. You are paid at once, in proportion to the time: 45 of 60 minutes pays 75% of that round's reward. No break is needed.`,
@@ -2345,7 +2379,7 @@
           <div class="card">
             <h2>Settings &amp; backup <small class="ver" title="Released ${APP_DATE}">v${APP_VERSION}</small></h2>
             <div class="field"><label>Daily study goal (minutes)</label>
-              <input type="number" min="0" max="1440" step="15" data-change="goal" value="${data.settings.dailyGoalMin}"></div>
+              <input type="number" min="0" max="1440" step="15" data-change="goal" value="${data.settings.dailyGoalMin}">${goalListHtml()}</div>
             <div class="field"><label>Longest gap counted as break (minutes)</label>
               <input type="number" min="10" max="720" step="10" data-change="gap-cap" value="${gapCapMin()}"></div>
             <div class="field"><label class="chk"><input type="checkbox" data-change="ask-focus" ${data.settings.askFocus !== false ? 'checked' : ''}> Ask for a focus rating when I stop a timer</label></div>
@@ -2568,6 +2602,7 @@
           <button class="${ui.tt.scope === 'onward' ? 'on' : ''}" data-action="tt-scope" data-v="onward">Edit this day &amp; after</button>
           <button class="${ui.tt.scope === 'day' ? 'on' : ''}" data-action="tt-scope" data-v="day">This day only</button>
         </div>
+        ${active ? '<button class="btn" data-action="tt-suggest">✨ Suggest plan</button>' : ''}
         <label class="inline-lbl">Day starts <input type="time" data-change="tt-anchor" value="${data.settings.dayStart || '05:00'}" style="width:auto"></label>
       </div>
       <div class="grid">
@@ -2583,6 +2618,7 @@
           </div>
           <div class="card">
             <h2>${v === 'list' ? 'Plan' : 'Day timeline'} <small>${blocks.length} ${blocks.length === 1 ? 'block' : 'blocks'}</small></h2>
+            ${suggHtml(date)}
             ${!blocks.length ? '<div class="empty"><b>No blocks yet</b>Type lines like <i>14:00 to 15:00 Ratio v5</i> above.</div>' : v === 'list' ? rows : timelineHtml(date, blocks, plan)}
           </div>
         </div>
@@ -2741,17 +2777,19 @@
     for (let i = 0; i <= Math.ceil(total / 60); i++) hoursHtml += `<div class="tl-hour" style="top:${i * TL_H}px"><span>${fromMin(anchorMin() + i * 60)}</span></div>`;
     const blk = items.map(({ b, s, e, lane, n }) => {
       const st = blockStatus(date, b, plan);
-      return `<div class="tb st-${st.key}" data-action="tt-edit" data-id="${b.id}" title="${esc(b.topic || defaultLabel(b.type))} · ${st.label}"
+      return `<div class="tb st-${st.key}" data-action="tt-sheet" data-id="${b.id}" title="${esc(b.topic || defaultLabel(b.type))} · ${b.start}–${b.end} · ${fmtDur(e - s)} · ${st.label}"
         style="--c:${cat(b.type).color};top:${s / 60 * TL_H}px;height:${Math.max(22, (e - s) / 60 * TL_H)}px;left:calc(${lane / n * 100}% + 2px);width:calc(${100 / n}% - 4px)">
-        <b>${esc(b.topic || defaultLabel(b.type))}</b><span>${b.start}–${b.end}</span><div class="tb-rs"></div></div>`;
+        <b>${esc(b.topic || defaultLabel(b.type))}</b><span>${b.start}–${b.end}</span><i class="tb-dur">${fmtDur(e - s)}</i><div class="tb-rs"></div></div>`;
     }).join('');
+    const ghosts = suggFor(date).map((g) => { const s = offMin(g.start), d = blockDur(g);
+      return `<div class="tb sg" data-action="sg-open" data-id="${g.id}" title="Suggested: ${esc(g.topic)} · ${g.start}–${g.end} · ${fmtDur(d)}" style="top:${s / 60 * TL_H}px;height:${Math.max(22, d / 60 * TL_H)}px;left:2px;width:calc(100% - 4px)"><b>✨ ${esc(g.topic)}</b><span>${g.start}–${g.end}</span><i class="tb-dur" style="opacity:1">${fmtDur(d)}</i></div>`; }).join('');
     let now = '';
     if (date === activePlanDate()) {
       const m = (Date.now() - anchorMs(date)) / 60000;
       if (m >= 0 && m <= total) now = `<div class="tl-now" style="top:${m / 60 * TL_H}px"></div>`;
     }
-    return `<p class="note" style="margin-bottom:10px">Drag a block to move it, drag its bottom edge to resize, or tap it to edit.</p>
-      <div class="tl" style="height:${total / 60 * TL_H}px">${hoursHtml}<div class="tl-lane">${blk}${now}</div></div>`;
+    return `<p class="note" style="margin-bottom:10px">Tap a block to start it, mark it done or change its length. Drag it to move it, or drag its bottom edge to resize.</p>
+      <div class="tl" style="height:${total / 60 * TL_H}px">${hoursHtml}<div class="tl-lane">${blk}${ghosts}${now}</div></div>`;
   }
 
   // drag to move / resize on the timeline (mouse & pen; touch can resize, tap to edit)
@@ -2800,6 +2838,90 @@
     render();
   }, 30000);
 
+  // ---------- block sheet (tap a block on the timeline) ----------
+  const DUR_PRESETS = [[15, '15m'], [30, '30m'], [60, '1h'], [120, '2h']];
+  function blockSheet(date, id) {
+    const plan = resolvePlan(date), b = plan.blocks.find((x) => x.id === id); if (!b) return;
+    const st = blockStatus(date, b, plan), dur = blockDur(b), active = date === activePlanDate();
+    const act = st.act ? ` · did ${short(st.act)}` : '';
+    const btn = [];
+    if (active && st.key !== 'skipped') btn.push(`<button class="btn primary" data-action="bs-start" data-id="${id}">▶ ${st.act && st.key !== 'done' ? 'Resume' : 'Start'}</button>`);
+    if (st.early) btn.push(`<button class="btn" data-action="bs-done" data-id="${id}" data-on="0">Reopen</button>`);
+    else if (st.act > 0 && st.key !== 'done' && st.key !== 'skipped') btn.push(`<button class="btn" data-action="bs-done" data-id="${id}" data-on="1">✓ Mark done</button>`);
+    btn.push(`<button class="btn" data-action="bs-skip" data-id="${id}">${st.key === 'skipped' ? 'Unskip' : 'Skip'}</button>`);
+    btn.push(`<button class="btn" data-action="bs-edit" data-id="${id}">Edit</button>`);
+    $('#modal-root').innerHTML = `
+      <div class="overlay" data-action="modal-bg">
+        <div class="modal" role="dialog" aria-label="Block">
+          <h3>${esc(b.topic || defaultLabel(b.type))}</h3>
+          <p class="note" style="margin:-6px 0 12px">${b.start}–${b.end} · ${fmtDur(dur)} · ${st.label}${act}</p>
+          <div class="field"><label>Length</label><div class="dchips">${DUR_PRESETS.map(([m, l]) => `<button class="dchip ${dur === m ? 'on' : ''}" data-action="bs-dur" data-id="${id}" data-m="${m}">${l}</button>`).join('')}</div></div>
+          ${st.act > 0 || st.key === 'skipped' ? '' : '<p class="note" style="margin-bottom:10px">Start it to track the time. Once you have studied some of it you can mark it done.</p>'}
+          <div class="foot wrap">${btn.join('')}<button class="btn" data-action="modal-close">Close</button></div>
+        </div>
+      </div>`;
+  }
+  function setBlockLen(date, id, m) {
+    savePlan(date, (next) => { const b = next.blocks.find((x) => x.id === id); if (b) b.end = fromMin(toMin(b.start) + m); });
+  }
+
+  // ---------- suggest a plan (today only; nothing is saved until you accept) ----------
+  const suggFor = (date) => (ui.tt.sugg && ui.tt.sugg.date === date ? ui.tt.sugg.blocks : []);
+  function buildSuggestion(mode) {
+    const date = activePlanDate(), plan = resolvePlan(date), now = Date.now();
+    const nowOff = Math.max(0, Math.ceil((now - anchorMs(date)) / 60000 / 5) * 5);
+    const sleeps = plan.blocks.filter((b) => !plan.skipped.includes(b.id) && kindOf(b.type) === 'sleep' && offMin(b.start) > nowOff).map((b) => offMin(b.start));
+    const limit = Math.min(1440, sleeps.length ? Math.min(...sleeps) : offMin('23:00') || 1440);
+    const busy = plan.blocks.filter((b) => !plan.skipped.includes(b.id)).map((b) => [offMin(b.start), offMin(b.start) + blockDur(b)]).sort((x, y) => x[0] - y[0]);
+    const gaps = []; let cur = nowOff;
+    busy.forEach(([x, y]) => { if (x > cur) gaps.push([cur, Math.min(x, limit)]); cur = Math.max(cur, y); });
+    if (cur < limit) gaps.push([cur, limit]);
+    // how many study minutes are still missing for the daily goal
+    let target = null;
+    if (mode === 'goal') {
+      const td = todayStr(), studied = Math.round(live(data.sessions).filter((x) => x.date === td && kindOf(x.type) === 'study').reduce((n, x) => n + x.seconds, 0) / 60) + (data.timer && isStudyTimer(data.timer) ? Math.round(elapsedMs(data.timer) / 60000) : 0);
+      const planned = plan.blocks.filter((b) => !plan.skipped.includes(b.id) && kindOf(b.type) === 'study' && blockTimes(date, b).endMs > now).reduce((n, b) => n + Math.max(0, blockDur(b) - Math.round(blockActual(date, b.id) / 60)), 0);
+      target = Math.max(0, (data.settings.dailyGoalMin || 0) - studied - planned);
+      if (target < 15) return { blocks: [], note: 'Your goal is already covered by what you have done and planned.' };
+    }
+    // topics: weak / new / due first, mixing subjects
+    const used = new Set(plan.blocks.map((b) => (b.topic || '').toLowerCase()));
+    const lists = live(data.subjects).map((sj) => topicRecs(sj.id).filter((r) => r.tag !== 'Today' && !used.has(r.name.toLowerCase()))).filter((l) => l.length);
+    const loose = live(data.topics).filter((t) => !t.subjectId && kindOf(t.type) === 'study' && !used.has(t.name.toLowerCase()));
+    if (loose.length) lists.push(loose.map((t) => ({ name: t.name, why: 'Not in a subject', tag: '', score: 0 })));
+    lists.sort((a, b) => b[0].score - a[0].score);
+    if (!lists.length) return { blocks: [], note: 'No topics to suggest yet. Add some in Topics & Presets first.' };
+    let li = 0; const nextTopic = () => { for (let i = 0; i < lists.length; i++) { const l = lists[(li + i) % lists.length]; if (l.length) { li = (li + i + 1) % lists.length; return l.shift(); } } return null; };
+    const chunk = defaultBlockMin(), out = [];
+    let left = target;
+    for (const [a, z] of gaps) {
+      let c = a;
+      while (z - c >= 30 && (left === null || left > 0)) {
+        let len = Math.min(chunk, z - c); if (left !== null) len = Math.min(len, left);
+        len = Math.floor(len / 5) * 5; if (len < 15) break;
+        const tp = nextTopic(); if (!tp) break;
+        out.push({ id: uid(), start: fromMin(anchorMin() + c), end: fromMin(anchorMin() + c + len), topic: tp.name, type: 'study', priority: 'medium', note: '', why: tp.why, tag: tp.tag });
+        c += len + 10; if (left !== null) left -= len;
+      }
+    }
+    return { blocks: out, note: out.length ? '' : 'There is no free time left today to plan.' };
+  }
+  function suggHtml(date) {
+    const g = suggFor(date); if (!g.length) return '';
+    const tot = g.reduce((n, x) => n + blockDur(x), 0);
+    return `<div class="sg-ban"><div class="sg-h"><b>✨ Suggested for today</b><span>${g.length} ${g.length === 1 ? 'block' : 'blocks'} · ${fmtDur(tot)} · ${ui.tt.sugg.mode === 'goal' ? 'to reach your goal' : 'full day'}</span></div>
+      ${sortBlocks(g).map((x) => `<div class="sg-row"><div><b>${x.start}–${x.end}</b> ${esc(x.topic)}<small>${esc(x.why || '')}${x.tag ? ' · ' + x.tag : ''} · ${fmtDur(blockDur(x))}</small></div><div class="sg-b"><button class="btn sm primary" data-action="sg-accept" data-id="${x.id}">Add</button><button class="btn sm" data-action="sg-drop" data-id="${x.id}" aria-label="Remove">✕</button></div></div>`).join('')}
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-action="sg-accept-all">Accept all</button><button class="btn" data-action="sg-clear">Dismiss</button><span class="note">Only for today. Accepted blocks become normal blocks you can move or resize.</span></div></div>`;
+  }
+  function acceptSugg(ids) {
+    const date = activePlanDate(), pick = suggFor(date).filter((x) => ids.includes(x.id)); if (!pick.length) return;
+    const sc = ui.tt.scope; ui.tt.scope = 'day'; // never repeat today's suggestions on the days after
+    try { savePlan(date, (next) => { pick.forEach((x) => { const { why, tag, ...rec } = x; next.blocks.push(rec); }); }); } finally { ui.tt.scope = sc; }
+    ui.tt.sugg.blocks = ui.tt.sugg.blocks.filter((x) => !ids.includes(x.id));
+    if (!ui.tt.sugg.blocks.length) ui.tt.sugg = null;
+    render(); toast(`Added ${pick.length} ${pick.length === 1 ? 'block' : 'blocks'} to today`);
+  }
+
   function blockModal(date, existing) {
     const now = new Date(), r5 = Math.ceil((now.getHours() * 60 + now.getMinutes()) / 5) * 5;
     const b = existing || { start: date === activePlanDate() ? fromMin(r5) : fromMin(anchorMin()), end: '', topic: '', type: 'study', priority: 'medium', note: '' };
@@ -2815,7 +2937,8 @@
         <div class="field grow"><label>From</label><input type="time" id="b-start" data-bind="b-calc" value="${b.start}"></div>
         <div class="field grow"><label>To</label><input type="time" id="b-end" data-bind="b-calc" value="${b.end}"></div>
       </div>
-      <div class="note" id="b-dur" style="margin:-6px 0 14px"></div>
+      <div class="dchips" style="margin:-4px 0 8px">${DUR_PRESETS.map(([m, l]) => `<button type="button" class="dchip" data-action="b-preset" data-m="${m}">${l}</button>`).join('')}</div>
+      <div class="note" id="b-dur" style="margin:-2px 0 14px"></div>
       <div class="field"><label>Note (optional)</label><input type="text" id="b-note" value="${esc(b.note || '')}"></div>
       ${existing ? `<button class="btn danger sm" data-action="tt-del-modal" data-id="${existing.id}">Delete this block</button>` : ''}`,
     () => {
@@ -3068,8 +3191,9 @@
   }
   const isWorkout = (s) => !!s.active || (!isMeditation(s) && /workout|exercise|gym|yoga|fitness|\b(walk|walking|run|running|jog|jogging|stretch|stretching|cardio|cycling|swim|swimming|sport|sports|hiit)\b/i.test(cat(s.type).name + ' ' + s.topic));
   function computePoints() {
+    refreshGoal();
     const cfg = data.pointsCfg, v = ptv(), today = todayStr(), now = Date.now();
-    const start = cfg.startDate || today, goal = data.settings.dailyGoalMin * 60;
+    const start = cfg.startDate || today;
     const by = {}, actual = {};
     live(data.sessions).forEach((s) => {
       (by[s.date] = by[s.date] || []).push(s);
@@ -3106,6 +3230,7 @@
     let L = 0, A = 0, streakLen = 0, spent = 0, pending = 0, debt = 0, borrowed = 0, repaidAll = 0;
     for (let d = first, guard = 0; d <= today && guard < 4000; d = addDays(d, 1), guard++) {
       const isToday = d === today, finished = !isToday;
+      const goal = goalSecOn(d), boost = goalBoostOn(d);
       const list = by[d] || [];
       let study = list.filter((s) => kindOf(s.type) === 'study').reduce((n, s) => n + s.seconds, 0);
       if (isToday && tm && kindOf(tm.type) === 'study') study += tmElapsed;
@@ -3120,6 +3245,7 @@
       const studyPts = Math.round(study / 60 * v.study30 / 30);
       add(`Study ${short(study)}`, studyPts, 'earn'); // every minute counts
       if (goal > 0 && study >= goal) add('Daily goal reached', v.goal, 'earn');
+      if (boost > 0) add(`New-goal boost +${boost}%`, Math.round((studyPts + (goal > 0 && study >= goal ? v.goal : 0)) * boost / 100), 'earn');
       if (goal > 0 && v.stretchMin * 60 > goal && study >= v.stretchMin * 60) add('Stretch goal reached', v.stretch, 'earn');
       { // planning bonus: within the window after you wake (longest sleep of the day); falls back to the fixed time if no sleep is logged
         const sl = list.filter((s) => kindOf(s.type) === 'sleep').sort((x, y) => y.seconds - x.seconds)[0];
@@ -3195,7 +3321,7 @@
         }
         if (finished && parseYmd(d).getDay() === 0 && ws >= start) {
           if (v.perfectWeek > 0 && goal > 0) {
-            let met = 0, ok = true; for (let x = ws; x <= d; x = addDays(x, 1)) { if (sOf(x) >= goal) met++; else if (!isRest(x)) ok = false; }
+            let met = 0, ok = true; for (let x = ws; x <= d; x = addDays(x, 1)) { if (sOf(x) >= goalSecOn(x)) met++; else if (!isRest(x)) ok = false; }
             if (ok && met >= 4) add('Perfect week', v.perfectWeek, 'earn');
           }
           if (v.improve > 0) {
@@ -3801,7 +3927,8 @@
       if (x.early && acc >= ROUND_EARLY && acc < ROUND_SEC) acc = ROUND_SEC; // 'Break now' at 55+ minutes: the round counts as a full hour
       if (!paid && acc >= ROUND_SEC) { paid = true; doneN++; const p = roundPts(k); if (p) events.push({ k, pts: p }); }
       // "last round": at least half an hour of the round, topic finished. Pays at once (in proportion to the time) and closes the chain.
-      if (x.last && acc >= ROUND_SEC / 2) { const p = paid ? roundPts(k) : Math.round(roundPts(k) * Math.min(1, acc / ROUND_SEC)); if (p && !paid) events.push({ k, pts: p, last: true }); closed = { k, pts: p, sec: acc }; rowRound('last'); k = 1; acc = 0; emN = 0; parts = []; paid = false; }
+      if (x.last && acc >= ROUND_SEC / 2 && cbAt(last)) { if (!paid) { paid = true; doneN++; const p = roundPts(k); if (p) events.push({ k, pts: p }); } acc = Math.max(acc, ROUND_SEC); } // a closed chain that was bought back stays open
+      else if (x.last && acc >= ROUND_SEC / 2) { const p = paid ? roundPts(k) : Math.round(roundPts(k) * Math.min(1, acc / ROUND_SEC)); if (p && !paid) events.push({ k, pts: p, last: true }); closed = { k, pts: p, sec: acc }; rowRound('last'); k = 1; acc = 0; emN = 0; parts = []; paid = false; }
     });
     // not studying right now: a long enough time away ends the round (and resets the chain if the 15 minutes ran out)
     let late = null;
@@ -3879,13 +4006,19 @@
     else sub = r.lastEn ? `Last study ended ${hhmm(r.lastEn)}` : 'Study 60 minutes to start your chain';
     const nowRow = `<div class="n">Round ${r.k} · ${r.done ? 'hour done' : Math.floor(r.acc / 60) + '/60 min'}<small>${sub}</small></div>`;
     const dots = Array.from({ length: ROUND_EM_N }, (_, i) => `<b class="${i < r.emN ? 'off' : ''}"></b>`).join('');
-    const lastLog = r.log[r.log.length - 1], endRow = lastLog && lastLog.t === 'end' && lastLog.restorable ? lastLog : null; // only the chain that ended most recently can be restored; once you have studied again, an older loss is history
+    const lastLog = r.log[r.log.length - 1], closedRow = lastLog && lastLog.t === 'round' && lastLog.how === 'last' ? lastLog : null, endRow = lastLog && lastLog.t === 'end' && lastLog.restorable ? lastLog : null; // only the chain that ended most recently can be restored; once you have studied again, an older loss is history
     let box = '';
     if (endRow) {
       const price = restorePrice(endRow.k, endRow.gapMin), bought = live(data.redemptions).some((x) => x.chainRestore && x.date === td);
       if (bought) box = '<div class="ch-buy off"><span class="note">Chain restore already used today</span></div>';
       else if (pts.A < price) box = `<div class="ch-buy off"><span><b>Restore Round ${endRow.k}</b><br><span class="note">Costs ${price} points · you have ${pts.A}</span></span></div>`;
       else box = `<div class="ch-buy"><span><b>Restore Round ${endRow.k}</b><br><span class="note">Back ${endRow.gapMin >= 120 ? Math.round(endRow.gapMin / 6) / 10 + ' h' : endRow.gapMin + ' min'} late · any time today · once a day</span></span><button class="btn sm" data-action="chain-restore" data-after="${endRow.last}" data-k="${endRow.k}" data-gap="${endRow.gapMin}">Restore · ${price} pts</button></div>`;
+    }
+    if (!endRow && closedRow) { // you closed the chain yourself with Last round: it can be bought back too
+      const price = restorePrice(closedRow.k, 0), bought = live(data.redemptions).some((x) => x.chainRestore && x.date === td);
+      if (bought) box = '<div class="ch-buy off"><span class="note">Chain restore already used today</span></div>';
+      else if (pts.A < price) box = `<div class="ch-buy off"><span><b>Reopen the chain</b><br><span class="note">Costs ${price} points · you have ${pts.A}</span></span></div>`;
+      else box = `<div class="ch-buy"><span><b>Reopen the chain</b><br><span class="note">You closed it after Round ${closedRow.k} · keep going to Round ${closedRow.k + 1} · once a day</span></span><button class="btn sm" data-action="chain-restore" data-after="${closedRow.en}" data-k="${closedRow.k}" data-gap="0">Reopen · ${price} pts</button></div>`;
     }
     const btns = [];
     if (t && (t.roundBreak || t.emergency)) btns.push('<button class="btn sm primary" data-action="back-study">Back to studying</button>');
@@ -4026,6 +4159,7 @@
     lockApplied = on;
   }
   function render() {
+    refreshGoal();
     if (focusLocked() && ui.page !== 'today') { ui.page = 'today'; ui.date = todayStr(); }
     $$('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === ui.page));
     const main = $('#main');
@@ -4154,9 +4288,31 @@
     'tt-prev': () => { ui.tt.date = addDays(ttDate(), -1); render(); },
     'tt-next': () => { ui.tt.date = addDays(ttDate(), 1); render(); },
     'tt-today': () => { ui.tt.date = activePlanDate(); ui.tt.scrollNow = true; render(); },
-    'tt-view': (el) => { ui.tt.view = el.dataset.v; ui.tt.scrollNow = true; render(); },
+    'tt-view': (el) => { ui.tt.view = el.dataset.v; try { localStorage.setItem('st-tt-view', ui.tt.view); } catch (e) { /* ignore */ } ui.tt.scrollNow = true; render(); },
     'tt-scope': (el) => { ui.tt.scope = el.dataset.v; render(); toast(ui.tt.scope === 'day' ? 'Edits now change only this day' : 'Edits now also apply to the days after'); },
+    'goal-del': (el) => { const f = el.dataset.from; if (f <= todayStr()) return; data.settings.goalPlan = (data.settings.goalPlan || []).filter((e) => e.from !== f); touch(data.settings); persist(true); render(); toast('Goal change removed'); },
     'tt-add': () => blockModal(ttDate(), null),
+    'tt-sheet': (el) => { if (justDragged) return; blockSheet(ttDate(), el.dataset.id); },
+    'bs-start': (el) => { closeModal(); startFromBlock(ttDate(), el.dataset.id); },
+    'bs-done': (el) => { closeModal(); const on = el.dataset.on === '1', d = ttDate(), id = el.dataset.id; markBlockDone(d, id, on); toast(on ? 'Block marked done' : 'Block reopened', () => markBlockDone(d, id, !on)); },
+    'bs-skip': (el) => { closeModal(); actions['tt-skip'](el); },
+    'bs-edit': (el) => { closeModal(); actions['tt-edit'](el); },
+    'bs-dur': (el) => { closeModal(); setBlockLen(ttDate(), el.dataset.id, +el.dataset.m); },
+    'b-preset': (el) => { const st = $('#b-start'), en = $('#b-end'); if (!st || !en || !st.value) return; en.value = fromMin(toMin(st.value) + +el.dataset.m); updateBlockDur(); },
+    'tt-suggest': () => {
+      if (ttDate() !== activePlanDate()) { toast('Suggestions are for today only'); return; }
+      choiceModal('Suggest a plan for today', `<p style="line-height:1.55">I will fill your free time from now until bedtime with the topics that need you most (weak, new, due), mixing subjects. Nothing is saved until you accept.</p><p class="note" style="margin-top:8px">What should I plan?</p>`, [
+        { label: 'Cancel' },
+        { label: 'Just my study goal', fn: () => { const r = buildSuggestion('goal'); if (!r.blocks.length) { toast(r.note); return; } ui.tt.sugg = { date: activePlanDate(), mode: 'goal', blocks: r.blocks }; render(); } },
+        { label: 'The full day', cls: 'primary', fn: () => { const r = buildSuggestion('full'); if (!r.blocks.length) { toast(r.note); return; } ui.tt.sugg = { date: activePlanDate(), mode: 'full', blocks: r.blocks }; render(); } },
+      ]);
+    },
+    'sg-open': (el) => { const g = suggFor(ttDate()).find((x) => x.id === el.dataset.id); if (!g) return; const id = g.id;
+      choiceModal('Suggested block', `<p style="line-height:1.55"><b>${esc(g.topic)}</b><br>${g.start}–${g.end} · ${fmtDur(blockDur(g))}<br><span class="note">${esc(g.why || '')}</span></p>`, [{ label: 'Close' }, { label: 'Remove' , fn: () => { ui.tt.sugg.blocks = ui.tt.sugg.blocks.filter((x) => x.id !== id); if (!ui.tt.sugg.blocks.length) ui.tt.sugg = null; render(); } }, { label: 'Add to today', cls: 'primary', fn: () => acceptSugg([id]) }]); },
+    'sg-accept': (el) => acceptSugg([el.dataset.id]),
+    'sg-accept-all': () => acceptSugg(suggFor(ttDate()).map((x) => x.id)),
+    'sg-drop': (el) => { ui.tt.sugg.blocks = ui.tt.sugg.blocks.filter((x) => x.id !== el.dataset.id); if (!ui.tt.sugg.blocks.length) ui.tt.sugg = null; render(); },
+    'sg-clear': () => { ui.tt.sugg = null; render(); },
     'tt-edit': (el) => {
       if (justDragged) return;
       const b = resolvePlan(ttDate()).blocks.find((x) => x.id === el.dataset.id);
@@ -4429,7 +4585,7 @@
     'back-study': () => backToStudy(),
     'chain-restore': (el) => {
       const after = +el.dataset.after, k = +el.dataset.k, gapMin = +el.dataset.gap, price = restorePrice(k, gapMin);
-      choiceModal('Restore your chain?', `<p style="line-height:1.55">Pay <b>${price} points</b> to keep your chain after that late return. You will be on <b>Round ${k + 1}</b>. You can do this once a day.</p>`, [{ label: 'Cancel' }, { label: `Pay ${price} points`, cls: 'primary', fn: () => restoreChain(after, k, gapMin) }]);
+      choiceModal('Restore your chain?', `<p style="line-height:1.55">Pay <b>${price} points</b> to keep your chain going (after a late return, or after you closed it with Last round). You will be on <b>Round ${k + 1}</b>. You can do this once a day.</p>`, [{ label: 'Cancel' }, { label: `Pay ${price} points`, cls: 'primary', fn: () => restoreChain(after, k, gapMin) }]);
     },
     'break-now': () => {
       const t = data.timer, r = roundNow(); if (!t || !isStudyTimer(t) || r.done || r.acc < ROUND_EARLY_FROM) return;
@@ -4650,8 +4806,10 @@
     'prog-from': (el) => { if (el.value) { ui.prog.from = el.value; render(); } },
     'prog-to': (el) => { if (el.value) { ui.prog.to = el.value; render(); } },
     goal: (el) => {
-      data.settings.dailyGoalMin = Math.max(0, parseInt(el.value, 10) || 0);
-      touch(data.settings); persist(true); toast('Goal updated');
+      const min = Math.max(0, Math.min(1440, parseInt(el.value, 10) || 0)), cur = goalMinOn(todayStr());
+      el.value = cur; // nothing changes until you pick a start date
+      if (min === cur) return;
+      goalModal(min);
     }
   };
 
