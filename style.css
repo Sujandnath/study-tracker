@@ -993,3 +993,8 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
 .why-opt input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--blue, #2563eb); flex-shrink: 0; }
 .why-opt b { display: block; font-weight: 700; }
 .why-opt small { display: block; color: #64748b; font-size: 12.5px; margin-top: 2px; line-height: 1.4; }
+
+/* v69: starred quotes */
+.star-btn { font-size: 16px; line-height: 1; padding: 6px 10px; color: #94a3b8; }
+.star-btn.on { color: #f59e0b; border-color: #fcd34d; background: #fffbeb; }
+.qrow.starred { box-shadow: inset 3px 0 0 #f59e0b; }

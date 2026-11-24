@@ -1536,10 +1536,10 @@
   }
   function quotesTabHtml() {
     const all = quotesLive(), pins = all.filter((q) => q.pinned).length;
-    return `<div class="note" style="margin-bottom:12px">Today shows a random quote each time you open the app. ${pins ? `Only your <b>${pins}</b> pinned ${pins === 1 ? 'quote is' : 'quotes are'} used${pins === 1 ? ', so it always shows' : ''}.` : 'Pin quotes to choose which ones it uses. Pin just one to always see it.'}</div>
-      <div class="stack">${all.length ? all.slice().reverse().map((q) => `<div class="card qrow ${q.pinned ? 'pinned' : ''}">
+    return `<div class="note" style="margin-bottom:12px">Starred quotes (★) stay at the top of this list. Today shows a random quote each time you open the app. ${pins ? `Only your <b>${pins}</b> pinned ${pins === 1 ? 'quote is' : 'quotes are'} used${pins === 1 ? ', so it always shows' : ''}.` : 'Pin quotes to choose which ones it uses. Pin just one to always see it.'}</div>
+      <div class="stack">${all.length ? all.slice().reverse().sort((a, b) => (b.starred ? 1 : 0) - (a.starred ? 1 : 0)).map((q) => `<div class="card qrow ${q.pinned ? 'pinned' : ''} ${q.starred ? 'starred' : ''}">
         <div class="qr-t"><q>${esc(q.text)}</q>${q.author ? `<small>${esc(q.author)}</small>` : ''}</div>
-        <div class="qr-b"><button class="btn sm ${q.pinned ? 'primary' : ''}" data-action="q-pin" data-id="${q.id}">${q.pinned ? '📌 Pinned' : '📌 Pin'}</button><button class="btn sm" data-action="jr-qedit" data-id="${q.id}">Edit</button><button class="btn sm danger" data-action="jr-qdel" data-id="${q.id}">Delete</button></div></div>`).join('') : '<div class="empty"><b>No quotes yet</b>Add one with the button above.</div>'}</div>`;
+        <div class="qr-b"><button class="btn sm star-btn ${q.starred ? 'on' : ''}" data-action="q-star" data-id="${q.id}" title="${q.starred ? 'Remove the star' : 'Star: keep at the top of the list'}" aria-label="${q.starred ? 'Unstar' : 'Star'} this quote">${q.starred ? '★' : '☆'}</button><button class="btn sm ${q.pinned ? 'primary' : ''}" data-action="q-pin" data-id="${q.id}">${q.pinned ? '📌 Pinned' : '📌 Pin'}</button><button class="btn sm" data-action="jr-qedit" data-id="${q.id}">Edit</button><button class="btn sm danger" data-action="jr-qdel" data-id="${q.id}">Delete</button></div></div>`).join('') : '<div class="empty"><b>No quotes yet</b>Add one with the button above.</div>'}</div>`;
   }
   function pageToday() {
     const d = ui.date, isToday = d === todayStr();
@@ -2333,8 +2333,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 68, APP_DATE = '23 Nov 2026';
+  const APP_VERSION = 69, APP_DATE = '23 Nov 2026';
   const CHANGELOG = [
+    [69, '25 Nov', 'Quotes: a ★ star on every quote keeps your favourites at the top of the Quotes list.'],
     [68, '25 Nov', 'Suggest plan, smarter: the ✕ asks why (just remove / too long / not today / never), it learns from what you add, swap or remove, puts hard topics in your best focus hours, has a ⇄ swap button and a switch for breaks between blocks. 15 more quotes from Marcus Aurelius, Seneca and Epictetus on time, work and the present, in modern English.'],
     [67, '25 Nov', 'Journal now has two tabs: Entries and Quotes. Add your own quotes (8 starters included, with Marcus Aurelius), pin the ones you like, and Today shows a random one in its header every time you open the app, with a shuffle and a pin button.'],
     [66, '24 Nov', 'Suggested blocks: the ✕ now asks first and has a "Never suggest this topic" box. Hidden topics show "Allow again" in Topics & Presets.'],
@@ -4847,6 +4848,7 @@
     'jr-qnew': () => quoteModal(null),
     'jr-qedit': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (q) quoteModal(q); },
     'jr-qdel': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (q) softDelete(q, 'Quote deleted'); },
+    'q-star': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (!q) return; q.starred = !q.starred; touch(q); persist(true); render(); toast(q.starred ? 'Starred: moved to the top' : 'Star removed'); },
     'q-open': () => { ui.page = 'journal'; ui.jr.tab = 'quotes'; render(); },
     'q-shuffle': () => {
       const pool = quotesLive().filter((q) => q.pinned);
