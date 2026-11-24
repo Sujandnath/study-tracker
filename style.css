@@ -981,3 +981,15 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
 .qr-t { flex: 1; min-width: 220px; }
 .qr-b { display: flex; gap: 6px; flex-wrap: wrap; }
 @media (max-width: 860px) { .page-head .q-ban { order: 5; flex-basis: 100%; max-width: none; margin: 8px 0 0; } }
+
+/* v68: planner upgrades */
+.sw-row { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; font-weight: 600; font-size: 14px; cursor: pointer; }
+.sw-row input { width: 18px; height: 18px; accent-color: var(--blue, #2563eb); }
+.sg-row.brk { opacity: .8; padding: 4px 0; }
+.sg-row.brk small { display: inline; margin-left: 6px; }
+.why-list { display: flex; flex-direction: column; gap: 8px; }
+.why-opt { display: flex; gap: 10px; align-items: flex-start; border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.why-opt:has(input:checked) { border-color: var(--blue, #2563eb); background: #f5f9ff; }
+.why-opt input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--blue, #2563eb); flex-shrink: 0; }
+.why-opt b { display: block; font-weight: 700; }
+.why-opt small { display: block; color: #64748b; font-size: 12.5px; margin-top: 2px; line-height: 1.4; }

@@ -49,10 +49,29 @@
   const live = (arr) => (arr || []).filter((x) => !x.deleted);
   // starter quotes (fixed ids, so two devices never create duplicates). Marcus Aurelius is from George Long's public-domain translation of the Meditations.
   const DEFAULT_QUOTES = [
-    { id: 'q-def-1', text: 'In the morning when thou risest unwillingly, let this thought be present — I am rising to the work of a human being.', author: 'Marcus Aurelius, Meditations' },
+    // Marcus Aurelius: George Long's public-domain translation, put into modern English
+    { id: 'q-def-1', text: 'In the morning, when you rise unwillingly, let this thought be present: I am rising to the work of a human being.', author: 'Marcus Aurelius, Meditations' },
     { id: 'q-def-2', text: 'The mind converts and changes every hindrance to its activity into an aid.', author: 'Marcus Aurelius, Meditations' },
-    { id: 'q-def-3', text: 'We suffer more often in imagination than in reality.', author: 'Seneca' },
-    { id: 'q-def-4', text: 'Men are disturbed not by things, but by the views which they take of them.', author: 'Epictetus' },
+    { id: 'q-def-9', text: 'Even if you were going to live three thousand years, or ten times that, remember that no one loses any other life than the one he is living now, and no one lives any other than the one he is losing.', author: 'Marcus Aurelius, Meditations 2.14' },
+    { id: 'q-def-10', text: 'The present is the only thing a person can be deprived of, if it is the only thing they have, and no one can lose what they do not have.', author: 'Marcus Aurelius, Meditations 2.14' },
+    { id: 'q-def-11', text: 'Confine yourself to the present.', author: 'Marcus Aurelius, Meditations 8.36' },
+    { id: 'q-def-12', text: 'Do not disturb yourself by thinking of the whole of your life.', author: 'Marcus Aurelius, Meditations 8.36' },
+    { id: 'q-def-13', text: 'Do not let future things disturb you, for you will meet them, if you must, with the same reason you use for the present.', author: 'Marcus Aurelius, Meditations 7.8' },
+    { id: 'q-def-14', text: 'Remember how long you have been putting these things off, and how often you have received an opportunity and not used it.', author: 'Marcus Aurelius, Meditations 2.4' },
+    { id: 'q-def-15', text: 'Every moment, think steadily, as a Roman and as a man, about doing what you have in hand.', author: 'Marcus Aurelius, Meditations 2.5' },
+    // Seneca: Richard Gummere's public-domain translation of the Letters
+    { id: 'q-def-3', text: 'We suffer more often in imagination than in reality.', author: 'Seneca, Letters 13' },
+    { id: 'q-def-16', text: 'Hold every hour in your grasp. Lay hold of today\u2019s task, and you will not need to depend so much upon tomorrow\u2019s.', author: 'Seneca, Letters 1' },
+    { id: 'q-def-17', text: 'While we are postponing, life speeds by.', author: 'Seneca, Letters 1' },
+    { id: 'q-def-18', text: 'Nothing, Lucilius, is ours, except time.', author: 'Seneca, Letters 1' },
+    { id: 'q-def-19', text: 'It is not because things are difficult that we do not dare; it is because we do not dare that they are difficult.', author: 'Seneca, Letters 104' },
+    // Epictetus: Elizabeth Carter's and George Long's public-domain translations, put into modern English
+    { id: 'q-def-4', text: 'People are disturbed not by things, but by the opinions they form about things.', author: 'Epictetus, Enchiridion 5' },
+    { id: 'q-def-20', text: 'Some things are in our control and others not.', author: 'Epictetus, Enchiridion 1' },
+    { id: 'q-def-21', text: 'Remember that you are an actor in a drama, of such a kind as the author pleases to make it.', author: 'Epictetus, Enchiridion 17' },
+    { id: 'q-def-22', text: 'First say to yourself what you would be; and then do what you have to do.', author: 'Epictetus, Discourses 3.23' },
+    { id: 'q-def-23', text: 'No great thing is created suddenly, any more than a bunch of grapes or a fig.', author: 'Epictetus, Discourses 1.15' },
+    // others
     { id: 'q-def-5', text: 'A journey of a thousand miles begins with a single step.', author: 'Lao Tzu' },
     { id: 'q-def-6', text: 'Well done is better than well said.', author: 'Benjamin Franklin' },
     { id: 'q-def-7', text: 'Genius is one percent inspiration and ninety-nine percent perspiration.', author: 'Thomas Edison' },
@@ -184,7 +203,10 @@
         else if (/shower|bath/i.test(x.name || '')) x.earn = { pts: 2, max: 1, min: 3 }; });
       d.settings.routineSeeded = true;
     }
-    if (!d.settings.quotesSeeded) { DEFAULT_QUOTES.forEach((q) => { if (!d.quotes.some((x) => x.id === q.id)) d.quotes.push({ ...q, updatedAt: 1 }); }); d.settings.quotesSeeded = true; }
+    if ((d.settings.quotesSeedV || 0) < 2) { // starters: add new ones, and refresh the older wording of starters you have not edited
+      DEFAULT_QUOTES.forEach((q) => { const ex = d.quotes.find((x) => x.id === q.id); if (!ex) d.quotes.push({ ...q, updatedAt: 1 }); else if ((ex.updatedAt || 0) <= 1 && !ex.deleted) { ex.text = q.text; ex.author = q.author; } });
+      d.settings.quotesSeedV = 2; d.settings.quotesSeeded = true;
+    }
     if (!d.timer) d.timer = null;
     return d;
   }
@@ -2311,8 +2333,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 67, APP_DATE = '23 Nov 2026';
+  const APP_VERSION = 68, APP_DATE = '23 Nov 2026';
   const CHANGELOG = [
+    [68, '25 Nov', 'Suggest plan, smarter: the ✕ asks why (just remove / too long / not today / never), it learns from what you add, swap or remove, puts hard topics in your best focus hours, has a ⇄ swap button and a switch for breaks between blocks. 15 more quotes from Marcus Aurelius, Seneca and Epictetus on time, work and the present, in modern English.'],
     [67, '25 Nov', 'Journal now has two tabs: Entries and Quotes. Add your own quotes (8 starters included, with Marcus Aurelius), pin the ones you like, and Today shows a random one in its header every time you open the app, with a shuffle and a pin button.'],
     [66, '24 Nov', 'Suggested blocks: the ✕ now asks first and has a "Never suggest this topic" box. Hidden topics show "Allow again" in Topics & Presets.'],
     [65, '24 Nov', 'New study goals start on a date you choose, so past days keep their goal. A new goal can carry a points boost (default +10%) on the days it applies.'],
@@ -2675,7 +2698,7 @@
           <div class="card">
             <h2>${v === 'list' ? 'Plan' : 'Day timeline'} <small>${blocks.length} ${blocks.length === 1 ? 'block' : 'blocks'}</small></h2>
             ${suggHtml(date)}
-            ${!blocks.length ? '<div class="empty"><b>No blocks yet</b>Type lines like <i>14:00 to 15:00 Ratio v5</i> above.</div>' : v === 'list' ? rows : timelineHtml(date, blocks, plan)}
+            ${!blocks.length && !suggFor(date).length ? '<div class="empty"><b>No blocks yet</b>Type lines like <i>14:00 to 15:00 Ratio v5</i> above.</div>' : v === 'list' ? rows : timelineHtml(date, blocks, plan)}
           </div>
         </div>
         <div class="stack">
@@ -2838,7 +2861,7 @@
         <b>${esc(b.topic || defaultLabel(b.type))}</b><span>${b.start}–${b.end}</span><i class="tb-dur">${fmtDur(e - s)}</i><div class="tb-rs"></div></div>`;
     }).join('');
     const ghosts = suggFor(date).map((g) => { const s = offMin(g.start), d = blockDur(g);
-      return `<div class="tb sg" data-action="sg-open" data-id="${g.id}" title="Suggested: ${esc(g.topic)} · ${g.start}–${g.end} · ${fmtDur(d)}" style="top:${s / 60 * TL_H}px;height:${Math.max(22, d / 60 * TL_H)}px;left:2px;width:calc(100% - 4px)"><b>✨ ${esc(g.topic)}</b><span>${g.start}–${g.end}</span><i class="tb-dur" style="opacity:1">${fmtDur(d)}</i></div>`; }).join('');
+      return `<div class="tb sg" data-action="sg-open" data-id="${g.id}" title="Suggested: ${esc(g.topic)} · ${g.start}–${g.end} · ${fmtDur(d)}" style="top:${s / 60 * TL_H}px;height:${Math.max(22, d / 60 * TL_H)}px;left:2px;width:calc(100% - 4px)"><b>${g.type === 'break' ? '☕' : '✨'} ${esc(g.topic)}</b><span>${g.start}–${g.end}</span><i class="tb-dur" style="opacity:1">${fmtDur(d)}</i></div>`; }).join('');
     let now = '';
     if (date === activePlanDate()) {
       const m = (Date.now() - anchorMs(date)) / 60000;
@@ -2923,6 +2946,42 @@
 
   // ---------- suggest a plan (today only; nothing is saved until you accept) ----------
   const suggFor = (date) => (ui.tt.sugg && ui.tt.sugg.date === date ? ui.tt.sugg.blocks : []);
+  // what the app has learned from you: topics you add are favoured, topics you remove are held back
+  const sugAdj = (t) => (t ? Math.min(4, t.sugAcc || 0) - Math.min(8, (t.sugRej || 0) * 2) : 0);
+  const sugNote = (t, key, d) => { if (!t) return; t[key] = (t[key] || 0) + d; touch(t); };
+  const topicByName = (n) => live(data.topics).find((x) => x.name.toLowerCase() === String(n || '').toLowerCase());
+  const sugSkipNames = () => { const k = data.settings.sugSkip; return k && k.date === todayStr() ? k.names : []; };
+  const breaksOn = () => data.settings.sugBreak !== false;
+  // time of day: how well you focus around each hour (your own ratings, blended with a sensible default curve)
+  function hourScores() {
+    const sum = Array(24).fill(0), cnt = Array(24).fill(0); let rated = 0;
+    live(data.sessions).forEach((s) => { if (kindOf(s.type) !== 'study' || !(s.focus >= 1 && s.focus <= 5) || s.seconds < 900) return; const h = new Date(s.start).getHours(); sum[h] += s.focus; cnt[h]++; rated++; });
+    const curve = (h) => (h < 6 ? 0.3 : h < 8 ? 0.7 : h < 12 ? 1 : h < 15 ? 0.6 : h < 18 ? 0.8 : h < 21 ? 0.7 : 0.4);
+    const sc = Array.from({ length: 24 }, (_, h) => { let n = 0, t = 0; for (let k = -1; k <= 1; k++) { const x = (h + k + 24) % 24; n += cnt[x]; t += sum[x]; } return (t + 3 * (2.2 + 1.6 * curve(h))) / (n + 3); });
+    return { sc, fromData: rated >= 6 };
+  }
+  // every topic that may be suggested right now, best first (weak / new / due, then what you tend to accept)
+  function sugCandidates(skipNames) {
+    const used = new Set(skipNames), out = [];
+    const add = (r, t, subjId) => { const adj = sugAdj(t); out.push({ name: r.name, why: r.why + (adj >= 2 ? ' · you often add this' : ''), tag: r.tag, score: r.score + adj, heavy: r.tag === 'Weak' || r.tag === 'New', subj: subjId || '' }); };
+    live(data.subjects).forEach((sj) => topicRecs(sj.id).forEach((r) => { if (r.tag !== 'Today' && !used.has(r.name.toLowerCase())) add(r, topicByName(r.name), sj.id); }));
+    live(data.topics).filter((t) => !t.subjectId && kindOf(t.type) === 'study' && !t.noSuggest && !used.has(t.name.toLowerCase())).forEach((t) => add({ name: t.name, why: 'Not in a subject', tag: '', score: 0 }, t, ''));
+    return out.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  }
+  // short breaks between study blocks that follow each other (switchable)
+  function addBreaks(blocks, plan) {
+    const rest = blocks.filter((b) => !b.brkFor);
+    if (!breaksOn()) return rest;
+    const study = rest.filter((b) => kindOf(b.type) === 'study');
+    const others = plan.blocks.filter((b) => !plan.skipped.includes(b.id) && kindOf(b.type) === 'study').map((b) => [offMin(b.start), offMin(b.start) + blockDur(b)]);
+    const all = study.map((b) => [offMin(b.start), offMin(b.start) + blockDur(b)]).concat(others), res = rest.slice();
+    study.forEach((b) => {
+      const e = offMin(b.start) + blockDur(b), nxt = all.filter(([s0]) => s0 >= e).map(([s0]) => s0).sort((x, y) => x - y)[0];
+      if (nxt === undefined || nxt - e < 10 || nxt - e > 45) return;
+      res.push({ id: uid(), start: fromMin(anchorMin() + e), end: fromMin(anchorMin() + e + 10), topic: 'Break', type: 'break', priority: 'low', note: '', why: 'Rest before the next block', tag: '', brkFor: b.id });
+    });
+    return res;
+  }
   function buildSuggestion(mode) {
     const date = activePlanDate(), plan = resolvePlan(date), now = Date.now();
     const nowOff = Math.max(0, Math.ceil((now - anchorMs(date)) / 60000 / 5) * 5);
@@ -2932,65 +2991,103 @@
     const gaps = []; let cur = nowOff;
     busy.forEach(([x, y]) => { if (x > cur) gaps.push([cur, Math.min(x, limit)]); cur = Math.max(cur, y); });
     if (cur < limit) gaps.push([cur, limit]);
-    // how many study minutes are still missing for the daily goal
-    let target = null;
+    let target = null; // study minutes still missing for the daily goal
     if (mode === 'goal') {
       const td = todayStr(), studied = Math.round(live(data.sessions).filter((x) => x.date === td && kindOf(x.type) === 'study').reduce((n, x) => n + x.seconds, 0) / 60) + (data.timer && isStudyTimer(data.timer) ? Math.round(elapsedMs(data.timer) / 60000) : 0);
       const planned = plan.blocks.filter((b) => !plan.skipped.includes(b.id) && kindOf(b.type) === 'study' && blockTimes(date, b).endMs > now).reduce((n, b) => n + Math.max(0, blockDur(b) - Math.round(blockActual(date, b.id) / 60)), 0);
       target = Math.max(0, (data.settings.dailyGoalMin || 0) - studied - planned);
       if (target < 15) return { blocks: [], note: 'Your goal is already covered by what you have done and planned.' };
     }
-    // topics: weak / new / due first, mixing subjects
-    const used = new Set(plan.blocks.map((b) => (b.topic || '').toLowerCase()));
-    const lists = live(data.subjects).map((sj) => topicRecs(sj.id).filter((r) => r.tag !== 'Today' && !used.has(r.name.toLowerCase()))).filter((l) => l.length);
-    const loose = live(data.topics).filter((t) => !t.subjectId && kindOf(t.type) === 'study' && !t.noSuggest && !used.has(t.name.toLowerCase()));
-    if (loose.length) lists.push(loose.map((t) => ({ name: t.name, why: 'Not in a subject', tag: '', score: 0 })));
-    lists.sort((a, b) => b[0].score - a[0].score);
-    if (!lists.length) return { blocks: [], note: 'No topics to suggest yet. Add some in Topics & Presets first.' };
-    let li = 0; const nextTopic = () => { for (let i = 0; i < lists.length; i++) { const l = lists[(li + i) % lists.length]; if (l.length) { li = (li + i + 1) % lists.length; return l.shift(); } } return null; };
-    const chunk = defaultBlockMin(), out = [];
-    let left = target;
+    // 1) free slots
+    const chunk = defaultBlockMin(), slots = []; let left = target;
     for (const [a, z] of gaps) {
       let c = a;
       while (z - c >= 30 && (left === null || left > 0)) {
         let len = Math.min(chunk, z - c); if (left !== null) len = Math.min(len, left);
         len = Math.floor(len / 5) * 5; if (len < 15) break;
-        const tp = nextTopic(); if (!tp) break;
-        out.push({ id: uid(), start: fromMin(anchorMin() + c), end: fromMin(anchorMin() + c + len), topic: tp.name, type: 'study', priority: 'medium', note: '', why: tp.why, tag: tp.tag });
-        c += len + 10; if (left !== null) left -= len;
+        slots.push({ off: c, len }); c += len + 10; if (left !== null) left -= len;
       }
     }
-    return { blocks: out, note: out.length ? '' : 'There is no free time left today to plan.' };
+    if (!slots.length) return { blocks: [], note: 'There is no free time left today to plan.' };
+    // 2) topics, mixing subjects (the best of each subject in turn)
+    const used = new Set(plan.blocks.map((b) => (b.topic || '').toLowerCase()).concat(sugSkipNames().map((x) => x.toLowerCase())));
+    const cands = sugCandidates([...used]); if (!cands.length) return { blocks: [], note: 'No topics to suggest yet. Add some in Topics & Presets first, or restore hidden ones.' };
+    const bySubj = new Map(); cands.forEach((c) => { if (!bySubj.has(c.subj)) bySubj.set(c.subj, []); bySubj.get(c.subj).push(c); });
+    const lists = [...bySubj.values()].sort((a, b) => b[0].score - a[0].score); let li = 0;
+    const next = () => { for (let i = 0; i < lists.length; i++) { const l = lists[(li + i) % lists.length]; if (l.length) { li = (li + i + 1) % lists.length; return l.shift(); } } return null; };
+    const picks = []; while (picks.length < slots.length) { const t = next(); if (!t) break; picks.push(t); }
+    // 3) hard topics (weak, new) go to your best focus hours
+    const hs = hourScores(), slotScore = (s) => hs.sc[Math.floor(((anchorMin() + s.off) % 1440) / 60)];
+    const useSlots = slots.slice().sort((a, b) => slotScore(b) - slotScore(a)).slice(0, picks.length);
+    const order = picks.slice().sort((a, b) => (b.heavy - a.heavy) || (b.score - a.score));
+    const pairs = useSlots.map((s, i) => ({ s, t: order[i] })).sort((x, y) => x.s.off - y.s.off);
+    let out = pairs.map(({ s, t }) => {
+      const rec = topicByName(t.name), len = rec && rec.sugMin ? Math.min(s.len, rec.sugMin) : s.len;
+      return { id: uid(), start: fromMin(anchorMin() + s.off), end: fromMin(anchorMin() + s.off + len), topic: t.name, type: 'study', priority: 'medium', note: '', why: t.why, tag: t.tag, heavy: t.heavy };
+    });
+    const bestOff = useSlots[0] ? useSlots[0].off : 0, bh = fromMin(anchorMin() + bestOff);
+    const hint = out.some((b) => b.heavy) ? (hs.fromData ? `Hard topics (weak, new) are placed in your best focus hours, around ${bh}.` : `Hard topics (weak, new) are placed earlier in the day. Rate your focus after sessions and I will learn your best hours.`) : '';
+    out = addBreaks(out, plan);
+    return { blocks: out, note: '', hint };
+  }
+  function suggSync() { // after a block is removed or the break switch is flipped
+    const g = ui.tt.sugg; if (!g) return;
+    const plan = resolvePlan(g.date), study = g.blocks.filter((b) => !b.brkFor);
+    g.blocks = addBreaks(study, plan);
+    if (!g.blocks.some((b) => b.type !== 'break')) ui.tt.sugg = null;
   }
   function suggHtml(date) {
     const g = suggFor(date); if (!g.length) return '';
-    const tot = g.reduce((n, x) => n + blockDur(x), 0);
-    return `<div class="sg-ban"><div class="sg-h"><b>✨ Suggested for today</b><span>${g.length} ${g.length === 1 ? 'block' : 'blocks'} · ${fmtDur(tot)} · ${ui.tt.sugg.mode === 'goal' ? 'to reach your goal' : 'full day'}</span></div>
-      ${sortBlocks(g).map((x) => `<div class="sg-row"><div><b>${x.start}–${x.end}</b> ${esc(x.topic)}<small>${esc(x.why || '')}${x.tag ? ' · ' + x.tag : ''} · ${fmtDur(blockDur(x))}</small></div><div class="sg-b"><button class="btn sm primary" data-action="sg-accept" data-id="${x.id}">Add</button><button class="btn sm" data-action="sg-drop" data-id="${x.id}" aria-label="Remove">✕</button></div></div>`).join('')}
-      <div class="row" style="margin-top:10px"><button class="btn primary" data-action="sg-accept-all">Accept all</button><button class="btn" data-action="sg-clear">Dismiss</button><span class="note">Only for today. Accepted blocks become normal blocks you can move or resize.</span></div></div>`;
+    const st = g.filter((x) => x.type !== 'break'), tot = st.reduce((n, x) => n + blockDur(x), 0);
+    return `<div class="sg-ban"><div class="sg-h"><b>✨ Suggested for today</b><span>${st.length} ${st.length === 1 ? 'block' : 'blocks'} · ${fmtDur(tot)} study · ${ui.tt.sugg.mode === 'goal' ? 'to reach your goal' : 'full day'}</span></div>
+      <label class="sw-row"><input type="checkbox" data-change="sg-break" ${breaksOn() ? 'checked' : ''}> <span>Add breaks between blocks</span></label>
+      ${ui.tt.sugg.hint ? `<div class="note" style="margin:2px 0 6px">${esc(ui.tt.sugg.hint)}</div>` : ''}
+      ${sortBlocks(g).map((x) => x.type === 'break'
+        ? `<div class="sg-row brk"><div><b>${x.start}–${x.end}</b> ☕ Break<small>${fmtDur(blockDur(x))}</small></div><div class="sg-b"><button class="btn sm" data-action="sg-accept" data-id="${x.id}">Add</button><button class="btn sm" data-action="sg-drop" data-id="${x.id}" aria-label="Remove">✕</button></div></div>`
+        : `<div class="sg-row"><div><b>${x.start}–${x.end}</b> ${esc(x.topic)}<small>${esc(x.why || '')}${x.tag ? ' · ' + x.tag : ''} · ${fmtDur(blockDur(x))}</small></div><div class="sg-b"><button class="btn sm primary" data-action="sg-accept" data-id="${x.id}">Add</button><button class="btn sm" data-action="sg-swap" data-id="${x.id}" title="Swap for another topic" aria-label="Swap topic">⇄</button><button class="btn sm" data-action="sg-drop" data-id="${x.id}" aria-label="Remove">✕</button></div></div>`).join('')}
+      <div class="row" style="margin-top:10px"><button class="btn primary" data-action="sg-accept-all">Accept all</button><button class="btn" data-action="sg-clear">Dismiss</button><span class="note">Only for today. It learns from what you add, swap or remove.</span></div></div>`;
+  }
+  function swapSugg(id) {
+    const g = ui.tt.sugg && ui.tt.sugg.blocks.find((x) => x.id === id); if (!g || g.type === 'break') return;
+    const plan = resolvePlan(activePlanDate()), taken = new Set(plan.blocks.map((b) => (b.topic || '').toLowerCase()).concat(ui.tt.sugg.blocks.map((b) => (b.topic || '').toLowerCase()), (g.tried || []).map((x) => x.toLowerCase()), sugSkipNames().map((x) => x.toLowerCase())));
+    const c = sugCandidates([...taken])[0];
+    if (!c) { toast('No other topic to swap in'); return; }
+    sugNote(topicByName(g.topic), 'sugRej', 0.5); persist(true);
+    g.tried = (g.tried || []).concat(g.topic); g.topic = c.name; g.why = c.why; g.tag = c.tag; g.heavy = c.heavy;
+    const rec = topicByName(c.name); if (rec && rec.sugMin && blockDur(g) > rec.sugMin) g.end = fromMin(toMin(g.start) + rec.sugMin);
+    render();
   }
   function dropSugg(id) {
     const g = suggFor(ttDate()).find((x) => x.id === id); if (!g) return;
-    const t = live(data.topics).find((x) => x.name.toLowerCase() === (g.topic || '').toLowerCase());
-    openModal('Remove this suggestion?', `
-      <p style="line-height:1.55;margin-bottom:12px"><b>${esc(g.topic)}</b><br><span class="note">${g.start}–${g.end} · ${fmtDur(blockDur(g))}</span></p>
-      ${t ? `<label class="chk-row"><input type="checkbox" id="sg-never"> <span>Never suggest this topic</span></label>
-      <div class="note" style="margin-top:6px">It stays in your topics and you can still study it. You can undo this in Topics &amp; Presets with "Allow again".</div>` : ''}`,
+    if (g.type === 'break') { ui.tt.sugg.blocks = ui.tt.sugg.blocks.filter((x) => x.id !== id); if (!ui.tt.sugg.blocks.some((x) => x.type !== 'break')) ui.tt.sugg = null; render(); return; }
+    const t = topicByName(g.topic), dur = blockDur(g), half = Math.max(15, Math.round(dur / 2 / 5) * 5);
+    const opt = (v, label, hint, on) => `<label class="why-opt"><input type="radio" name="sg-why" value="${v}" ${on ? 'checked' : ''}><span><b>${label}</b><small>${hint}</small></span></label>`;
+    openModal('Why remove it?', `
+      <p style="line-height:1.55;margin-bottom:10px"><b>${esc(g.topic)}</b><br><span class="note">${g.start}–${g.end} · ${fmtDur(dur)}</span></p>
+      <div class="why-list">
+        ${opt('rm', 'Just remove this one', 'Nothing else changes.', true)}
+        ${t && dur > 15 ? opt('long', 'Too long', `Make it ${fmtDur(half)} now, and use ${fmtDur(half)} blocks for this topic from now on.`) : ''}
+        ${t ? opt('today', 'Not today', 'Skip this topic until tomorrow.') : ''}
+        ${t ? opt('never', 'Never suggest this topic', 'It stays in your topics. Undo it in Topics &amp; Presets with "Allow again".') : ''}
+      </div>`,
     () => {
-      const never = $('#sg-never') && $('#sg-never').checked;
-      if (never && t) { t.noSuggest = true; touch(t); persist(true); }
-      const key = (g.topic || '').toLowerCase();
-      ui.tt.sugg.blocks = ui.tt.sugg.blocks.filter((x) => x.id !== id && !(never && (x.topic || '').toLowerCase() === key));
-      if (!ui.tt.sugg.blocks.length) ui.tt.sugg = null;
-      render(); if (never) toast(`${g.topic} will not be suggested again`);
+      const why = (document.querySelector('input[name=sg-why]:checked') || {}).value || 'rm', key = (g.topic || '').toLowerCase();
+      const drop = (pred) => { ui.tt.sugg.blocks = ui.tt.sugg.blocks.filter((x) => !pred(x)); };
+      if (why === 'long' && t) { t.sugMin = half; sugNote(t, 'sugRej', 0.5); g.end = fromMin(toMin(g.start) + half); persist(true); suggSync(); render(); toast(`${g.topic}: ${fmtDur(half)} blocks from now on`); return; }
+      if (why === 'today' && t) { const k = data.settings.sugSkip; data.settings.sugSkip = { date: todayStr(), names: [...new Set([...(k && k.date === todayStr() ? k.names : []), g.topic])] }; touch(data.settings); sugNote(t, 'sugRej', 0.5); drop((x) => (x.topic || '').toLowerCase() === key); }
+      else if (why === 'never' && t) { t.noSuggest = true; sugNote(t, 'sugRej', 1); drop((x) => (x.topic || '').toLowerCase() === key); }
+      else { sugNote(t, 'sugRej', 1); drop((x) => x.id === id); }
+      persist(true); suggSync(); render();
+      if (why === 'never') toast(`${g.topic} will not be suggested again`); else if (why === 'today') toast(`${g.topic} skipped for today`);
     }, 'Remove');
   }
   function acceptSugg(ids) {
     const date = activePlanDate(), pick = suggFor(date).filter((x) => ids.includes(x.id)); if (!pick.length) return;
     const sc = ui.tt.scope; ui.tt.scope = 'day'; // never repeat today's suggestions on the days after
-    try { savePlan(date, (next) => { pick.forEach((x) => { const { why, tag, ...rec } = x; next.blocks.push(rec); }); }); } finally { ui.tt.scope = sc; }
+    try { savePlan(date, (next) => { pick.forEach((x) => { const { why, tag, heavy, brkFor, tried, ...rec } = x; next.blocks.push(rec); }); }); } finally { ui.tt.scope = sc; }
+    pick.filter((x) => x.type !== 'break').forEach((x) => sugNote(topicByName(x.topic), 'sugAcc', 1)); persist(true);
     ui.tt.sugg.blocks = ui.tt.sugg.blocks.filter((x) => !ids.includes(x.id));
-    if (!ui.tt.sugg.blocks.length) ui.tt.sugg = null;
+    if (!ui.tt.sugg.blocks.some((x) => x.type !== 'break')) ui.tt.sugg = null;
     render(); toast(`Added ${pick.length} ${pick.length === 1 ? 'block' : 'blocks'} to today`);
   }
 
@@ -4382,13 +4479,14 @@
       if (ttDate() !== activePlanDate()) { toast('Suggestions are for today only'); return; }
       choiceModal('Suggest a plan for today', `<p style="line-height:1.55">I will fill your free time from now until bedtime with the topics that need you most (weak, new, due), mixing subjects. Nothing is saved until you accept.</p><p class="note" style="margin-top:8px">What should I plan?</p>`, [
         { label: 'Cancel' },
-        { label: 'Just my study goal', fn: () => { const r = buildSuggestion('goal'); if (!r.blocks.length) { toast(r.note); return; } ui.tt.sugg = { date: activePlanDate(), mode: 'goal', blocks: r.blocks }; render(); } },
-        { label: 'The full day', cls: 'primary', fn: () => { const r = buildSuggestion('full'); if (!r.blocks.length) { toast(r.note); return; } ui.tt.sugg = { date: activePlanDate(), mode: 'full', blocks: r.blocks }; render(); } },
+        { label: 'Just my study goal', fn: () => { const r = buildSuggestion('goal'); if (!r.blocks.length) { toast(r.note); return; } ui.tt.sugg = { date: activePlanDate(), mode: 'goal', blocks: r.blocks, hint: r.hint }; render(); } },
+        { label: 'The full day', cls: 'primary', fn: () => { const r = buildSuggestion('full'); if (!r.blocks.length) { toast(r.note); return; } ui.tt.sugg = { date: activePlanDate(), mode: 'full', blocks: r.blocks, hint: r.hint }; render(); } },
       ]);
     },
     'sg-open': (el) => { const g = suggFor(ttDate()).find((x) => x.id === el.dataset.id); if (!g) return; const id = g.id;
       choiceModal('Suggested block', `<p style="line-height:1.55"><b>${esc(g.topic)}</b><br>${g.start}–${g.end} · ${fmtDur(blockDur(g))}<br><span class="note">${esc(g.why || '')}</span></p>`, [{ label: 'Close' }, { label: 'Remove', fn: () => dropSugg(id) }, { label: 'Add to today', cls: 'primary', fn: () => acceptSugg([id]) }]); },
     'sg-accept': (el) => acceptSugg([el.dataset.id]),
+    'sg-swap': (el) => swapSugg(el.dataset.id),
     'sg-accept-all': () => acceptSugg(suggFor(ttDate()).map((x) => x.id)),
     'sg-drop': (el) => dropSugg(el.dataset.id),
     'sg-clear': () => { ui.tt.sugg = null; render(); },
@@ -4878,6 +4976,7 @@
       if (ptLocked()) { toast(lockMsg()); render(); return; }
       if (el.value && el.value !== data.pointsCfg.startDate) { ptLog(`Count points from: ${data.pointsCfg.startDate} → ${el.value}`); data.pointsCfg.startDate = el.value; touch(data.pointsCfg); persist(true); render(); }
     },
+    'sg-break': (el) => { data.settings.sugBreak = !!el.checked; touch(data.settings); persist(true); suggSync(); render(); },
     'topic-subject': (el) => { const t = data.topics.find((x) => x.id === el.dataset.id); if (t) { if (el.value) t.subjectId = el.value; else delete t.subjectId; touch(t); persist(true); render(); } },
     'imp-done': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.done = !!el.checked; touch(it); persist(true); render(); } },
     'block-mode': (el) => { data.settings.blockMode = el.value === 'countdown' ? 'countdown' : 'stopwatch'; touch(data.settings); persist(true); toast('Updated'); },
