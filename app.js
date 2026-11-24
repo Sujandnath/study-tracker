@@ -47,6 +47,17 @@
   const fmtShort = (s) => parseYmd(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
   const fmtDow = (s) => parseYmd(s).toLocaleDateString('en-IN', { weekday: 'long' });
   const live = (arr) => (arr || []).filter((x) => !x.deleted);
+  // starter quotes (fixed ids, so two devices never create duplicates). Marcus Aurelius is from George Long's public-domain translation of the Meditations.
+  const DEFAULT_QUOTES = [
+    { id: 'q-def-1', text: 'In the morning when thou risest unwillingly, let this thought be present — I am rising to the work of a human being.', author: 'Marcus Aurelius, Meditations' },
+    { id: 'q-def-2', text: 'The mind converts and changes every hindrance to its activity into an aid.', author: 'Marcus Aurelius, Meditations' },
+    { id: 'q-def-3', text: 'We suffer more often in imagination than in reality.', author: 'Seneca' },
+    { id: 'q-def-4', text: 'Men are disturbed not by things, but by the views which they take of them.', author: 'Epictetus' },
+    { id: 'q-def-5', text: 'A journey of a thousand miles begins with a single step.', author: 'Lao Tzu' },
+    { id: 'q-def-6', text: 'Well done is better than well said.', author: 'Benjamin Franklin' },
+    { id: 'q-def-7', text: 'Genius is one percent inspiration and ninety-nine percent perspiration.', author: 'Thomas Edison' },
+    { id: 'q-def-8', text: 'What we hope ever to do with ease, we must learn first to do with diligence.', author: 'Samuel Johnson' }
+  ];
   const touch = (o) => { o.updatedAt = Date.now(); return o; };
 
   // Categories: built-in Study / Break / Sleep / Other plus your own (Workout, Meals, Class…).
@@ -128,6 +139,7 @@
       categories: BUILTIN_CATS.map((b) => ({ ...b, updatedAt: 0 })),
       plans: {},
       templates: [],
+      quotes: [],
       settings: { dailyGoalMin: 240, dayStart: '05:00', gapCapMin: 120, sound: true, askFocus: true, restPerWeek: 1, blockMode: 'stopwatch', blockTing: true, blockMin: 60, pauseBudget: 10, longPause: 15, updatedAt: t },
       timer: null,
       timerUpdatedAt: 0
@@ -138,7 +150,7 @@
     d = d && typeof d === 'object' ? d : base;
     d.version = 1;
     d.deviceId = d.deviceId || base.deviceId;
-    for (const k of ['topics', 'subjects', 'rewards', 'redemptions', 'pauses', 'pointsLog', 'loans', 'repayments', 'presets', 'sessions', 'templates']) if (!Array.isArray(d[k])) d[k] = base[k];
+    for (const k of ['topics', 'subjects', 'rewards', 'redemptions', 'pauses', 'pointsLog', 'loans', 'repayments', 'presets', 'sessions', 'templates', 'quotes']) if (!Array.isArray(d[k])) d[k] = base[k] || [];
     if (!d.plans || typeof d.plans !== 'object' || Array.isArray(d.plans)) d.plans = {};
     if (!Array.isArray(d.categories)) d.categories = [];
     BUILTIN_CATS.forEach((b) => { if (!d.categories.some((x) => x.id === b.id)) d.categories.push({ ...b, updatedAt: 0 }); });
@@ -172,6 +184,7 @@
         else if (/shower|bath/i.test(x.name || '')) x.earn = { pts: 2, max: 1, min: 3 }; });
       d.settings.routineSeeded = true;
     }
+    if (!d.settings.quotesSeeded) { DEFAULT_QUOTES.forEach((q) => { if (!d.quotes.some((x) => x.id === q.id)) d.quotes.push({ ...q, updatedAt: 1 }); }); d.settings.quotesSeeded = true; }
     if (!d.timer) d.timer = null;
     return d;
   }
@@ -213,6 +226,7 @@
       if (!out.plans[day] || (p.updatedAt || 0) > (out.plans[day].updatedAt || 0)) out.plans[day] = p;
     }
     out.templates = mergeById(out.templates, inc.templates);
+    out.quotes = mergeById(out.quotes, inc.quotes);
     if ((inc.important.titleAt || 0) > (out.important.titleAt || 0)) { out.important.title = inc.important.title; out.important.titleAt = inc.important.titleAt; }
     out.important.items = mergeById(out.important.items, inc.important.items);
     for (const k of ['rest', 'checkins']) {
@@ -236,7 +250,7 @@
     page: 'today',
     date: todayStr(),
     tt: { date: null, view: (() => { try { return localStorage.getItem('st-tt-view') === 'list' ? 'list' : 'timeline'; } catch (e) { return 'timeline'; } })(), scope: 'onward', scrollNow: false, sugg: null },
-    jr: { q: '', month: 'all' },
+    jr: { q: '', month: 'all', tab: 'entries' },
     donut: { mode: 'type', sel: null },
     imp: { text: false },
     lib: { org: false, sel: [] },
@@ -401,7 +415,7 @@
     const text = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
     try { return JSON.parse(text); } catch { return null; }
   }
-  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, rewards: d.rewards, redemptions: d.redemptions, pauses: d.pauses, pointsCfg: d.pointsCfg, pointsLog: d.pointsLog, loans: d.loans, repayments: d.repayments, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
+  const syncPayload = (d) => JSON.stringify({ version: 1, topics: d.topics, subjects: d.subjects, rewards: d.rewards, redemptions: d.redemptions, pauses: d.pauses, pointsCfg: d.pointsCfg, pointsLog: d.pointsLog, loans: d.loans, repayments: d.repayments, presets: d.presets, sessions: d.sessions, journal: d.journal, important: d.important, rest: d.rest, checkins: d.checkins, plans: d.plans, templates: d.templates, quotes: d.quotes, categories: d.categories, timer: d.timer || null, timerUpdatedAt: d.timerUpdatedAt || 0, settings: d.settings });
 
   async function runSync() {
     if (!sync.token) return;
@@ -1422,7 +1436,7 @@
       <div class="list-row">
         ${org ? `<input type="checkbox" class="org-ck" data-action="org-pick" data-id="${t.id}" ${sel.has(t.id) ? 'checked' : ''} aria-label="Select ${esc(t.name)}">` : ''}
         <div class="grow"><div class="nm">${typeDot(t.type)}${esc(t.name)}</div>
-          <div class="meta">${esc(cat(t.type).name)} · ${short(topicTotal(t.name))} logged in total</div></div>
+          <div class="meta">${esc(cat(t.type).name)} · ${short(topicTotal(t.name))} logged in total${t.noSuggest ? ' · <span class="nosug">never suggested</span> <button class="linkbtn" data-action="topic-allow" data-id="' + t.id + '">Allow again</button>' : ''}</div></div>
 
         ${subs.length && !org ? `<select class="subj-sel" data-change="topic-subject" data-id="${t.id}" aria-label="Subject">${opts(subIds.has(t.subjectId) ? t.subjectId : '')}</select>` : ''}
         ${org ? '' : `<button class="btn sm" data-action="topic-edit" data-id="${t.id}">Edit</button>
@@ -1466,6 +1480,45 @@
   // =====================================================================
   //  TODAY PAGE
   // =====================================================================
+  // ---------- quotes: a random one on Today each time the app opens (or only your pinned ones) ----------
+  let quoteId = null;
+  const quotesLive = () => live(data.quotes).sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0) || (a.id < b.id ? -1 : 1));
+  function pickQuote(avoid) {
+    const all = quotesLive(), pin = all.filter((q) => q.pinned), pool = pin.length ? pin : all; if (!pool.length) return null;
+    const c = avoid && pool.length > 1 ? pool.filter((q) => q.id !== avoid) : pool;
+    return c[Math.floor(Math.random() * c.length)];
+  }
+  function curQuote() {
+    let q = quotesLive().find((x) => x.id === quoteId);
+    if (!q) { q = pickQuote(); quoteId = q ? q.id : null; }
+    return q;
+  }
+  function quoteBanner() {
+    const q = curQuote();
+    if (!q) return '<div class="q-ban q-empty"><button class="linkbtn" data-action="q-open">Add your first quote →</button></div>';
+    const sub = [q.author ? esc(q.author) : '', q.pinned ? 'pinned' : ''].filter(Boolean).join(' · ');
+    return `<div class="q-ban"><div class="q-t"><q>${esc(q.text)}</q>${sub ? `<small>${sub}</small>` : ''}</div>
+      <div class="q-ic"><button data-action="q-shuffle" title="Another quote" aria-label="Another quote">↻</button><button class="${q.pinned ? 'on' : ''}" data-action="q-pin" data-id="${q.id}" title="${q.pinned ? 'Unpin this quote' : 'Pin this quote'}" aria-label="${q.pinned ? 'Unpin' : 'Pin'} this quote">📌</button></div></div>`;
+  }
+  const quoteRefresh = () => { const el = $('.q-ban'); if (el) el.outerHTML = quoteBanner(); };
+  function quoteModal(q) {
+    openModal(q ? 'Edit quote' : 'New quote', `
+      <div class="field"><label>Quote</label><textarea id="q-text" style="min-height:110px" placeholder="Type or paste a quote">${q ? esc(q.text) : ''}</textarea></div>
+      <div class="field"><label>Author (optional)</label><input type="text" id="q-author" value="${q ? esc(q.author || '') : ''}" placeholder="Who said it, or where it is from"></div>`,
+    () => {
+      const text = $('#q-text').value.trim(), author = $('#q-author').value.trim();
+      if (!text) { toast('Write the quote first'); return false; }
+      if (q) { q.text = text; q.author = author; touch(q); } else data.quotes.push(touch({ id: uid(), text, author }));
+      persist(true); render();
+    });
+  }
+  function quotesTabHtml() {
+    const all = quotesLive(), pins = all.filter((q) => q.pinned).length;
+    return `<div class="note" style="margin-bottom:12px">Today shows a random quote each time you open the app. ${pins ? `Only your <b>${pins}</b> pinned ${pins === 1 ? 'quote is' : 'quotes are'} used${pins === 1 ? ', so it always shows' : ''}.` : 'Pin quotes to choose which ones it uses. Pin just one to always see it.'}</div>
+      <div class="stack">${all.length ? all.slice().reverse().map((q) => `<div class="card qrow ${q.pinned ? 'pinned' : ''}">
+        <div class="qr-t"><q>${esc(q.text)}</q>${q.author ? `<small>${esc(q.author)}</small>` : ''}</div>
+        <div class="qr-b"><button class="btn sm ${q.pinned ? 'primary' : ''}" data-action="q-pin" data-id="${q.id}">${q.pinned ? '📌 Pinned' : '📌 Pin'}</button><button class="btn sm" data-action="jr-qedit" data-id="${q.id}">Edit</button><button class="btn sm danger" data-action="jr-qdel" data-id="${q.id}">Delete</button></div></div>`).join('') : '<div class="empty"><b>No quotes yet</b>Add one with the button above.</div>'}</div>`;
+  }
   function pageToday() {
     const d = ui.date, isToday = d === todayStr();
     const list = sessionsOn(d);
@@ -1480,6 +1533,7 @@
           <h1>${fmtDow(d)}${isToday ? '<span class="today-pill">TODAY</span>' : ''}</h1>
           <p class="sub">${fmtLong(d)}</p>
         </div>
+        ${quoteBanner()}
         <div class="datenav">
           <button class="btn icon" data-action="date-prev" title="Previous day" aria-label="Previous day">${chev('left')}</button>
           <input type="date" data-change="date-pick" value="${d}">
@@ -1600,7 +1654,7 @@
   // choose a subject before you start: it fans out on click, then suggests which topic of that subject to do next
   function topicRecs(subjectId) {
     const today = todayStr(), sess = live(data.sessions).filter((x) => kindOf(x.type) === 'study');
-    return live(data.topics).filter((t) => t.subjectId === subjectId && kindOf(t.type) === 'study').map((t) => {
+    return live(data.topics).filter((t) => t.subjectId === subjectId && kindOf(t.type) === 'study' && !t.noSuggest).map((t) => {
       const mine = sess.filter((x) => (x.topic || '').toLowerCase() === t.name.toLowerCase()).sort((a, b) => b.start - a.start), last = mine[0];
       const days = last ? Math.max(0, Math.round((parseYmd(today) - parseYmd(last.date)) / 86400000)) : null;
       const todaySec = mine.filter((x) => x.date === today).reduce((n, x) => n + x.seconds, 0), rated = mine.find((x) => x.focus >= 1 && x.focus <= 5), weak = !!rated && rated.focus <= 2;
@@ -2257,8 +2311,10 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 65, APP_DATE = '23 Nov 2026';
+  const APP_VERSION = 67, APP_DATE = '23 Nov 2026';
   const CHANGELOG = [
+    [67, '25 Nov', 'Journal now has two tabs: Entries and Quotes. Add your own quotes (8 starters included, with Marcus Aurelius), pin the ones you like, and Today shows a random one in its header every time you open the app, with a shuffle and a pin button.'],
+    [66, '24 Nov', 'Suggested blocks: the ✕ now asks first and has a "Never suggest this topic" box. Hidden topics show "Allow again" in Topics & Presets.'],
     [65, '24 Nov', 'New study goals start on a date you choose, so past days keep their goal. A new goal can carry a points boost (default +10%) on the days it applies.'],
     [64, '24 Nov', 'Timetable: Timeline is now the default view. Tap a block to start it, mark it done, skip it or change its length (15m, 30m, 1h, 2h). Block length buttons in the editor, and the length shows when you hover a block. New Suggest plan button (today only).'],
     [63, '23 Nov', 'You can now buy back a chain you closed yourself with Last round (Reopen the chain on the Focus chain card).'],
@@ -2887,7 +2943,7 @@
     // topics: weak / new / due first, mixing subjects
     const used = new Set(plan.blocks.map((b) => (b.topic || '').toLowerCase()));
     const lists = live(data.subjects).map((sj) => topicRecs(sj.id).filter((r) => r.tag !== 'Today' && !used.has(r.name.toLowerCase()))).filter((l) => l.length);
-    const loose = live(data.topics).filter((t) => !t.subjectId && kindOf(t.type) === 'study' && !used.has(t.name.toLowerCase()));
+    const loose = live(data.topics).filter((t) => !t.subjectId && kindOf(t.type) === 'study' && !t.noSuggest && !used.has(t.name.toLowerCase()));
     if (loose.length) lists.push(loose.map((t) => ({ name: t.name, why: 'Not in a subject', tag: '', score: 0 })));
     lists.sort((a, b) => b[0].score - a[0].score);
     if (!lists.length) return { blocks: [], note: 'No topics to suggest yet. Add some in Topics & Presets first.' };
@@ -2912,6 +2968,22 @@
     return `<div class="sg-ban"><div class="sg-h"><b>✨ Suggested for today</b><span>${g.length} ${g.length === 1 ? 'block' : 'blocks'} · ${fmtDur(tot)} · ${ui.tt.sugg.mode === 'goal' ? 'to reach your goal' : 'full day'}</span></div>
       ${sortBlocks(g).map((x) => `<div class="sg-row"><div><b>${x.start}–${x.end}</b> ${esc(x.topic)}<small>${esc(x.why || '')}${x.tag ? ' · ' + x.tag : ''} · ${fmtDur(blockDur(x))}</small></div><div class="sg-b"><button class="btn sm primary" data-action="sg-accept" data-id="${x.id}">Add</button><button class="btn sm" data-action="sg-drop" data-id="${x.id}" aria-label="Remove">✕</button></div></div>`).join('')}
       <div class="row" style="margin-top:10px"><button class="btn primary" data-action="sg-accept-all">Accept all</button><button class="btn" data-action="sg-clear">Dismiss</button><span class="note">Only for today. Accepted blocks become normal blocks you can move or resize.</span></div></div>`;
+  }
+  function dropSugg(id) {
+    const g = suggFor(ttDate()).find((x) => x.id === id); if (!g) return;
+    const t = live(data.topics).find((x) => x.name.toLowerCase() === (g.topic || '').toLowerCase());
+    openModal('Remove this suggestion?', `
+      <p style="line-height:1.55;margin-bottom:12px"><b>${esc(g.topic)}</b><br><span class="note">${g.start}–${g.end} · ${fmtDur(blockDur(g))}</span></p>
+      ${t ? `<label class="chk-row"><input type="checkbox" id="sg-never"> <span>Never suggest this topic</span></label>
+      <div class="note" style="margin-top:6px">It stays in your topics and you can still study it. You can undo this in Topics &amp; Presets with "Allow again".</div>` : ''}`,
+    () => {
+      const never = $('#sg-never') && $('#sg-never').checked;
+      if (never && t) { t.noSuggest = true; touch(t); persist(true); }
+      const key = (g.topic || '').toLowerCase();
+      ui.tt.sugg.blocks = ui.tt.sugg.blocks.filter((x) => x.id !== id && !(never && (x.topic || '').toLowerCase() === key));
+      if (!ui.tt.sugg.blocks.length) ui.tt.sugg = null;
+      render(); if (never) toast(`${g.topic} will not be suggested again`);
+    }, 'Remove');
   }
   function acceptSugg(ids) {
     const date = activePlanDate(), pick = suggFor(date).filter((x) => ids.includes(x.id)); if (!pick.length) return;
@@ -3101,12 +3173,18 @@
   }
   function pageJournal() {
     const months = [...new Set(journalAll().map((e) => e.d.slice(0, 7)))];
-    const v = journalView();
+    const v = journalView(), qt = ui.jr.tab === 'quotes', nq = quotesLive().length;
+    const tabs = `<div class="controls" style="margin-bottom:12px"><div class="seg"><button class="${!qt ? 'on' : ''}" data-action="jr-tab" data-v="entries">Entries</button><button class="${qt ? 'on' : ''}" data-action="jr-tab" data-v="quotes">Quotes <small>${nq}</small></button></div></div>`;
+    if (qt) return `
+      <div class="page-head">
+        <div><h1>Journal</h1><p class="sub">${nq} ${nq === 1 ? 'quote' : 'quotes'}</p></div>
+        <button class="btn primary" data-action="jr-qnew">+ New quote</button>
+      </div>${tabs}${quotesTabHtml()}`;
     return `
       <div class="page-head">
         <div><h1>Journal</h1><p class="sub" id="jr-count">${v.count}</p></div>
         <button class="btn primary" data-action="jr-new">+ New entry</button>
-      </div>
+      </div>${tabs}
       <div class="controls">
         <input type="text" id="jr-q" data-bind="jr-q" placeholder="Search your journal…" value="${esc(ui.jr.q)}" style="max-width:340px">
         <select data-change="jr-month" style="width:auto"><option value="all">All months</option>${months.map((m) => `<option value="${m}" ${ui.jr.month === m ? 'selected' : ''}>${monthLabel(m)}</option>`).join('')}</select>
@@ -4290,6 +4368,7 @@
     'tt-today': () => { ui.tt.date = activePlanDate(); ui.tt.scrollNow = true; render(); },
     'tt-view': (el) => { ui.tt.view = el.dataset.v; try { localStorage.setItem('st-tt-view', ui.tt.view); } catch (e) { /* ignore */ } ui.tt.scrollNow = true; render(); },
     'tt-scope': (el) => { ui.tt.scope = el.dataset.v; render(); toast(ui.tt.scope === 'day' ? 'Edits now change only this day' : 'Edits now also apply to the days after'); },
+    'topic-allow': (el) => { const t = data.topics.find((x) => x.id === el.dataset.id); if (t) { delete t.noSuggest; touch(t); persist(true); render(); toast('This topic can be suggested again'); } },
     'goal-del': (el) => { const f = el.dataset.from; if (f <= todayStr()) return; data.settings.goalPlan = (data.settings.goalPlan || []).filter((e) => e.from !== f); touch(data.settings); persist(true); render(); toast('Goal change removed'); },
     'tt-add': () => blockModal(ttDate(), null),
     'tt-sheet': (el) => { if (justDragged) return; blockSheet(ttDate(), el.dataset.id); },
@@ -4308,10 +4387,10 @@
       ]);
     },
     'sg-open': (el) => { const g = suggFor(ttDate()).find((x) => x.id === el.dataset.id); if (!g) return; const id = g.id;
-      choiceModal('Suggested block', `<p style="line-height:1.55"><b>${esc(g.topic)}</b><br>${g.start}–${g.end} · ${fmtDur(blockDur(g))}<br><span class="note">${esc(g.why || '')}</span></p>`, [{ label: 'Close' }, { label: 'Remove' , fn: () => { ui.tt.sugg.blocks = ui.tt.sugg.blocks.filter((x) => x.id !== id); if (!ui.tt.sugg.blocks.length) ui.tt.sugg = null; render(); } }, { label: 'Add to today', cls: 'primary', fn: () => acceptSugg([id]) }]); },
+      choiceModal('Suggested block', `<p style="line-height:1.55"><b>${esc(g.topic)}</b><br>${g.start}–${g.end} · ${fmtDur(blockDur(g))}<br><span class="note">${esc(g.why || '')}</span></p>`, [{ label: 'Close' }, { label: 'Remove', fn: () => dropSugg(id) }, { label: 'Add to today', cls: 'primary', fn: () => acceptSugg([id]) }]); },
     'sg-accept': (el) => acceptSugg([el.dataset.id]),
     'sg-accept-all': () => acceptSugg(suggFor(ttDate()).map((x) => x.id)),
-    'sg-drop': (el) => { ui.tt.sugg.blocks = ui.tt.sugg.blocks.filter((x) => x.id !== el.dataset.id); if (!ui.tt.sugg.blocks.length) ui.tt.sugg = null; render(); },
+    'sg-drop': (el) => dropSugg(el.dataset.id),
     'sg-clear': () => { ui.tt.sugg = null; render(); },
     'tt-edit': (el) => {
       if (justDragged) return;
@@ -4666,6 +4745,17 @@
     'sound-test': () => ting(),
     // --- journal
     'jr-new': () => journalModal(null),
+    'jr-tab': (el) => { ui.jr.tab = el.dataset.v === 'quotes' ? 'quotes' : 'entries'; render(); },
+    'jr-qnew': () => quoteModal(null),
+    'jr-qedit': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (q) quoteModal(q); },
+    'jr-qdel': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (q) softDelete(q, 'Quote deleted'); },
+    'q-open': () => { ui.page = 'journal'; ui.jr.tab = 'quotes'; render(); },
+    'q-shuffle': () => {
+      const pool = quotesLive().filter((q) => q.pinned);
+      if (pool.length === 1) { toast('Only one quote is pinned. Unpin it or pin more to shuffle.'); return; }
+      const q = pickQuote(quoteId); if (!q) return; quoteId = q.id; quoteRefresh();
+    },
+    'q-pin': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (!q) return; q.pinned = !q.pinned; touch(q); persist(true); toast(q.pinned ? 'Quote pinned' : 'Quote unpinned'); if (ui.page === 'journal') render(); else quoteRefresh(); },
     'jr-edit': (el) => journalModal(el.dataset.date),
     'jr-open': (el) => { ui.date = el.dataset.date; ui.page = 'today'; render(); },
     'jr-more': (el) => {
