@@ -1454,8 +1454,8 @@
     const subIds = new Set(subs.map((s) => s.id));
     const org = ui.lib.org, sel = new Set(ui.lib.sel);
     const opts = (cur) => `<option value="">No subject</option>${subs.map((s) => `<option value="${s.id}" ${cur === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}`;
-    const row = (t) => `
-      <div class="list-row">
+    const row = (t, child) => `
+      <div class="list-row${child ? ' fam-child' : ''}">
         ${org ? `<input type="checkbox" class="org-ck" data-action="org-pick" data-id="${t.id}" ${sel.has(t.id) ? 'checked' : ''} aria-label="Select ${esc(t.name)}">` : ''}
         <div class="grow"><div class="nm">${typeDot(t.type)}${esc(t.name)}</div>
           <div class="meta">${esc(cat(t.type).name)} · ${short(topicTotal(t.name))} logged in total${t.noSuggest ? ' · <span class="nosug">never suggested</span> <button class="linkbtn" data-action="topic-allow" data-id="' + t.id + '">Allow again</button>' : ''}</div></div>
@@ -1464,13 +1464,24 @@
         ${org ? '' : `<button class="btn sm" data-action="topic-edit" data-id="${t.id}">Edit</button>
         <button class="btn sm danger" data-action="topic-del" data-id="${t.id}">Delete</button>`}
       </div>`;
+    // versions of one topic are shown under one line (closed by default); in "Organise" everything is flat
+    const famRows = (list) => {
+      if (org) return list.map((t) => row(t)).join('');
+      const fams = new Map(); list.forEach((t) => { const f = famOfName(t.name, t); if (!fams.has(f.key)) fams.set(f.key, { label: f.label, items: [] }); fams.get(f.key).items.push(t); });
+      return [...fams.entries()].map(([key, f]) => {
+        if (f.items.length < 2) return row(f.items[0]);
+        const k = 'fam:' + key, open = !foldGet(k, true), tot = f.items.reduce((n, t) => n + topicTotal(t.name), 0);
+        return `<div class="fam-head" data-action="grp-fold" data-k="${esc(k)}" data-def="1" role="button" tabindex="0"><i class="car">${open ? '▾' : '▸'}</i><b>${esc(f.label)}</b><small>${f.items.length} versions · ${short(tot)}</small></div>${open ? f.items.map((t) => row(t, true)).join('') : ''}`;
+      }).join('');
+    };
     let body;
     if (!topics.length) body = '<div class="empty"><b>No saved topics yet</b>Add one here, or just start a timer – new topics are saved automatically.</div>';
-    else if (!subs.length) body = topics.map(row).join('');
+    else if (!subs.length) body = famRows(topics);
     else {
       const groups = [...subs.map((s) => ({ name: s.name, color: s.color, list: topics.filter((t) => t.subjectId === s.id) })),
         { name: 'No subject', color: '#cbd5e1', list: topics.filter((t) => !subIds.has(t.subjectId)) }].filter((g) => g.list.length);
-      body = groups.map((g) => `<div class="grp-head"><span class="tdot" style="background:${g.color}"></span>${esc(g.name)}<small>${g.list.length} ${g.list.length === 1 ? 'topic' : 'topics'} · ${short(g.list.reduce((n, t) => n + topicTotal(t.name), 0))}</small></div>${g.list.map(row).join('')}`).join('');
+      body = groups.map((g) => { const k = 'sj:' + g.name, shut = !org && foldGet(k, false);
+        return `<div class="grp-head fold ${shut ? 'shut' : ''}" data-action="grp-fold" data-k="${esc(k)}" role="button" tabindex="0"><i class="car">${shut ? '▸' : '▾'}</i><span class="tdot" style="background:${g.color}"></span>${esc(g.name)}<small>${g.list.length} ${g.list.length === 1 ? 'topic' : 'topics'} · ${short(g.list.reduce((n, t) => n + topicTotal(t.name), 0))}</small></div>${shut ? '' : famRows(g.list)}`; }).join('');
     }
     const bar = org ? `<div class="org-bar"><span>${sel.size} selected</span>
         <select id="org-target">${opts('')}</select>
@@ -1506,7 +1517,7 @@
   let quoteId = null;
   const quotesLive = () => live(data.quotes).sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0) || (a.id < b.id ? -1 : 1));
   function pickQuote(avoid) {
-    const all = quotesLive(), pin = all.filter((q) => q.pinned), pool = pin.length ? pin : all; if (!pool.length) return null;
+    const all = quotesLive(), pin = all.filter((q) => q.pinned), star = all.filter((q) => q.starred), pool = pin.length ? pin : star.length ? star : all; if (!pool.length) return null;
     const c = avoid && pool.length > 1 ? pool.filter((q) => q.id !== avoid) : pool;
     return c[Math.floor(Math.random() * c.length)];
   }
@@ -1518,9 +1529,9 @@
   function quoteBanner() {
     const q = curQuote();
     if (!q) return '<div class="q-ban q-empty"><button class="linkbtn" data-action="q-open">Add your first quote →</button></div>';
-    const sub = [q.author ? esc(q.author) : '', q.pinned ? 'pinned' : ''].filter(Boolean).join(' · ');
+    const sub = [q.author ? esc(q.author) : '', q.pinned ? 'pinned' : '', q.starred ? 'starred' : ''].filter(Boolean).join(' · ');
     return `<div class="q-ban"><div class="q-t"><q>${esc(q.text)}</q>${sub ? `<small>${sub}</small>` : ''}</div>
-      <div class="q-ic"><button data-action="q-shuffle" title="Another quote" aria-label="Another quote">↻</button><button class="${q.pinned ? 'on' : ''}" data-action="q-pin" data-id="${q.id}" title="${q.pinned ? 'Unpin this quote' : 'Pin this quote'}" aria-label="${q.pinned ? 'Unpin' : 'Pin'} this quote">📌</button></div></div>`;
+      <div class="q-ic"><button data-action="q-shuffle" title="Another quote" aria-label="Another quote">↻</button><button class="${q.starred ? 'on star' : ''}" data-action="q-star" data-id="${q.id}" title="${q.starred ? 'Remove the star' : 'Star this quote'}" aria-label="${q.starred ? 'Unstar' : 'Star'} this quote">${q.starred ? '★' : '☆'}</button><button class="${q.pinned ? 'on' : ''}" data-action="q-pin" data-id="${q.id}" title="${q.pinned ? 'Unpin this quote' : 'Pin this quote'}" aria-label="${q.pinned ? 'Unpin' : 'Pin'} this quote">📌</button></div></div>`;
   }
   const quoteRefresh = () => { const el = $('.q-ban'); if (el) el.outerHTML = quoteBanner(); };
   function quoteModal(q) {
@@ -1536,7 +1547,7 @@
   }
   function quotesTabHtml() {
     const all = quotesLive(), pins = all.filter((q) => q.pinned).length;
-    return `<div class="note" style="margin-bottom:12px">Starred quotes (★) stay at the top of this list. Today shows a random quote each time you open the app. ${pins ? `Only your <b>${pins}</b> pinned ${pins === 1 ? 'quote is' : 'quotes are'} used${pins === 1 ? ', so it always shows' : ''}.` : 'Pin quotes to choose which ones it uses. Pin just one to always see it.'}</div>
+    return `<div class="note" style="margin-bottom:12px">Starred quotes (★) stay at the top of this list. Today shows a random quote each time you open the app: from your <b>pinned</b> quotes if you have any (pin just one to always see it), otherwise from your <b>starred</b> ones${all.some((q) => q.starred) ? ` (${all.filter((q) => q.starred).length})` : ''}, otherwise from all of them.</div>
       <div class="stack">${all.length ? all.slice().reverse().sort((a, b) => (b.starred ? 1 : 0) - (a.starred ? 1 : 0)).map((q) => `<div class="card qrow ${q.pinned ? 'pinned' : ''} ${q.starred ? 'starred' : ''}">
         <div class="qr-t"><q>${esc(q.text)}</q>${q.author ? `<small>${esc(q.author)}</small>` : ''}</div>
         <div class="qr-b"><button class="btn sm star-btn ${q.starred ? 'on' : ''}" data-action="q-star" data-id="${q.id}" title="${q.starred ? 'Remove the star' : 'Star: keep at the top of the list'}" aria-label="${q.starred ? 'Unstar' : 'Star'} this quote">${q.starred ? '★' : '☆'}</button><button class="btn sm ${q.pinned ? 'primary' : ''}" data-action="q-pin" data-id="${q.id}">${q.pinned ? '📌 Pinned' : '📌 Pin'}</button><button class="btn sm" data-action="jr-qedit" data-id="${q.id}">Edit</button><button class="btn sm danger" data-action="jr-qdel" data-id="${q.id}">Delete</button></div></div>`).join('') : '<div class="empty"><b>No quotes yet</b>Add one with the button above.</div>'}</div>`;
@@ -1665,10 +1676,25 @@
   };
   const stTitle = (k) => (k === 'break' ? ['Taking a break?', 'Add a label if you like, then start the clock'] : k === 'sleep' ? ['Time to rest?', 'Start the clock when you lie down, or log sleep you already had'] : ['What are you working on?', 'Type a topic, or tap a recent one']);
   const stPlaceholder = (k) => (k === 'break' ? 'e.g. Tea, walk, lunch' : k === 'sleep' ? 'e.g. Night sleep, nap' : 'Type a topic or pick a saved one');
+  // ---------- topic families: "Percentage", "Percentage v2", "Percentage part 3" belong together (worked out from the name, nothing is merged) ----------
+  const FAM_RE = /^(.*?\S)[\s\-\u2013:_]*(?:v|ver|version|#|no\.?|part|pt\.?|set|test|ch|chapter)?[\s.]*\d+[a-z]?\s*$/i;
+  function famOfName(name, rec) {
+    const n = String(name || '').trim();
+    if (rec && rec.family && rec.family.trim()) return { key: rec.family.trim().toLowerCase(), label: rec.family.trim() };
+    const m = FAM_RE.exec(n);
+    if (m && m[1].length >= 3 && /[a-z]/i.test(m[1])) return { key: m[1].trim().toLowerCase(), label: m[1].trim() };
+    return { key: n.toLowerCase(), label: n };
+  }
+  const famOf = (name) => famOfName(name, live(data.topics).find((x) => x.name.toLowerCase() === String(name || '').toLowerCase()));
+  // fold state (open / closed) for groups and cards, remembered on this device
+  let foldMem = null;
+  const foldAll = () => { if (!foldMem) { try { foldMem = JSON.parse(localStorage.getItem('st-fold') || '{}') || {}; } catch (e) { foldMem = {}; } } return foldMem; };
+  const foldGet = (k, def) => { const m = foldAll(); return k in m ? m[k] === 1 : !!def; };
+  const foldSet = (k, v) => { foldAll()[k] = v ? 1 : 0; try { localStorage.setItem('st-fold', JSON.stringify(foldMem)); } catch (e) { /* ignore */ } };
   function recentTopics(type) {
     const seen = new Set(), out = [];
     live(data.sessions).filter((s) => s.type === type && (s.topic || '').trim()).sort((x, y) => y.start - x.start).forEach((s) => {
-      const k = s.topic.toLowerCase(); if (!seen.has(k) && out.length < 5) { seen.add(k); out.push(s.topic); }
+      const k = famOf(s.topic).key; if (!seen.has(k) && out.length < 5) { seen.add(k); out.push(s.topic); } // one chip per family: the version you did last
     });
     return out;
   }
@@ -2333,8 +2359,10 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 69, APP_DATE = '23 Nov 2026';
+  const APP_VERSION = 71, APP_DATE = '23 Nov 2026';
   const CHANGELOG = [
+    [71, '25 Nov', 'Topic families: Percentage, Percentage v2, Percentage part 3 are grouped by name (Group as… in Edit topic to change it). Suggestions offer the best version only, the Topics list folds them, and the start-card chips show one per family. Fold buttons on subjects, families and on the cards of the Today, Timetable, Progress, Rewards and Topics pages, remembered on each device.'],
+    [70, '25 Nov', 'Today quote: a ☆ star button next to the quote, and starred quotes are what Today picks from (unless you have pinned quotes).'],
     [69, '25 Nov', 'Quotes: a ★ star on every quote keeps your favourites at the top of the Quotes list.'],
     [68, '25 Nov', 'Suggest plan, smarter: the ✕ asks why (just remove / too long / not today / never), it learns from what you add, swap or remove, puts hard topics in your best focus hours, has a ⇄ swap button and a switch for breaks between blocks. 15 more quotes from Marcus Aurelius, Seneca and Epictetus on time, work and the present, in modern English.'],
     [67, '25 Nov', 'Journal now has two tabs: Entries and Quotes. Add your own quotes (8 starters included, with Marcus Aurelius), pin the ones you like, and Today shows a random one in its header every time you open the app, with a shuffle and a pin button.'],
@@ -2489,6 +2517,7 @@
     openModal(existing ? 'Edit topic' : 'New topic', `
       <div class="field"><label>Name</label><input type="text" id="t-name" value="${esc(t.name)}" placeholder="e.g. Organic Chemistry"></div>
       <div class="field"><label>Type</label><select id="t-type">${cats().filter((x) => x.kind === 'study' || x.kind === 'neutral').map((x) => `<option value="${esc(x.id)}" ${t.type === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></div>
+      <div class="field"><label>Group as <span class="note">(optional)</span></label><input type="text" id="t-family" value="${esc(t.family || '')}" placeholder="${esc(t.name ? 'Auto: ' + famOfName(t.name).label : 'Auto from the name, e.g. Percentage')}"><div class="note" style="margin-top:4px">Topics with the same group are shown together, and only the best one is suggested.</div></div>
       ${live(data.subjects).length ? `<div class="field"><label>Subject</label><select id="t-subj"><option value="">No subject</option>${live(data.subjects).sort((x, y) => x.name.localeCompare(y.name)).map((s) => `<option value="${s.id}" ${t.subjectId === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>` : ''}
 `,
     () => {
@@ -2499,6 +2528,7 @@
       const rec = existing || { id: uid() };
       Object.assign(rec, { name, type: $('#t-type').value, priority: (existing && existing.priority) || 'medium' });
       { const sj = $('#t-subj'); if (sj) { if (sj.value) rec.subjectId = sj.value; else delete rec.subjectId; } }
+      { const fm = ($('#t-family').value || '').trim(); if (fm) rec.family = fm; else delete rec.family; }
       touch(rec);
       if (!existing) data.topics.push(rec);
       persist(true); render();
@@ -2967,7 +2997,11 @@
     const add = (r, t, subjId) => { const adj = sugAdj(t); out.push({ name: r.name, why: r.why + (adj >= 2 ? ' · you often add this' : ''), tag: r.tag, score: r.score + adj, heavy: r.tag === 'Weak' || r.tag === 'New', subj: subjId || '' }); };
     live(data.subjects).forEach((sj) => topicRecs(sj.id).forEach((r) => { if (r.tag !== 'Today' && !used.has(r.name.toLowerCase())) add(r, topicByName(r.name), sj.id); }));
     live(data.topics).filter((t) => !t.subjectId && kindOf(t.type) === 'study' && !t.noSuggest && !used.has(t.name.toLowerCase())).forEach((t) => add({ name: t.name, why: 'Not in a subject', tag: '', score: 0 }, t, ''));
-    return out.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+    // versions of one topic (Percentage, Percentage v2 …) compete as one: only the best version is offered
+    const fam = new Map();
+    out.forEach((c) => { const f = famOfName(c.name, topicByName(c.name)); c.famKey = f.key + '|' + c.subj; c.famLabel = f.label; const cur = fam.get(c.famKey); if (!cur) fam.set(c.famKey, { best: c, n: 1 }); else { cur.n++; if (c.score > cur.best.score) cur.best = c; } });
+    const res = [...fam.values()].map(({ best, n }) => (n > 1 ? { ...best, why: best.why + ` · best of ${n} ${best.famLabel} versions` } : best));
+    return res.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
   }
   // short breaks between study blocks that follow each other (switchable)
   function addBreaks(blocks, plan) {
@@ -4349,8 +4383,21 @@
     }
     if (ui.page === 'library') store.location().then((p) => { const el = $('#loc'); if (el) el.textContent = 'Data file: ' + p; });
     if (ui.page !== 'today') document.title = 'Study Tracker';
+    enhanceFold();
     applyFocusLock();
     tick();
+  }
+  // every card with a heading gets a small fold button; the choice is remembered per card
+  function enhanceFold() {
+    if (!['progress', 'library', 'timetable', 'today', 'rewards'].includes(ui.page)) return;
+    $$('#main .card').forEach((c) => {
+      const h = c.firstElementChild;
+      if (!h || h.tagName !== 'H2' || c.querySelector('#startcard, .ch-card') || c.dataset.fold) return;
+      const label = ((h.childNodes[0] && h.childNodes[0].textContent) || h.textContent || '').trim().slice(0, 40); if (!label) return;
+      const key = ui.page + ':' + label; c.dataset.fold = key;
+      const b = document.createElement('button'); b.className = 'fold-btn'; b.type = 'button'; b.setAttribute('data-action', 'card-fold'); b.setAttribute('aria-label', 'Collapse or expand this card'); b.title = 'Collapse / expand'; b.textContent = '▾';
+      const shut = foldGet(key, false); b.setAttribute('aria-expanded', String(!shut)); h.appendChild(b); if (shut) c.classList.add('folded');
+    });
   }
 
   function applyPreset(p) {
@@ -4466,6 +4513,8 @@
     'tt-today': () => { ui.tt.date = activePlanDate(); ui.tt.scrollNow = true; render(); },
     'tt-view': (el) => { ui.tt.view = el.dataset.v; try { localStorage.setItem('st-tt-view', ui.tt.view); } catch (e) { /* ignore */ } ui.tt.scrollNow = true; render(); },
     'tt-scope': (el) => { ui.tt.scope = el.dataset.v; render(); toast(ui.tt.scope === 'day' ? 'Edits now change only this day' : 'Edits now also apply to the days after'); },
+    'grp-fold': (el) => { const k = el.dataset.k, def = el.dataset.def === '1'; foldSet(k, !foldGet(k, def)); render(); },
+    'card-fold': (el) => { const c = el.closest('.card'); if (!c) return; const on = !c.classList.contains('folded'); c.classList.toggle('folded', on); foldSet(c.dataset.fold, on); el.setAttribute('aria-expanded', String(!on)); },
     'topic-allow': (el) => { const t = data.topics.find((x) => x.id === el.dataset.id); if (t) { delete t.noSuggest; touch(t); persist(true); render(); toast('This topic can be suggested again'); } },
     'goal-del': (el) => { const f = el.dataset.from; if (f <= todayStr()) return; data.settings.goalPlan = (data.settings.goalPlan || []).filter((e) => e.from !== f); touch(data.settings); persist(true); render(); toast('Goal change removed'); },
     'tt-add': () => blockModal(ttDate(), null),
@@ -4848,11 +4897,11 @@
     'jr-qnew': () => quoteModal(null),
     'jr-qedit': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (q) quoteModal(q); },
     'jr-qdel': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (q) softDelete(q, 'Quote deleted'); },
-    'q-star': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (!q) return; q.starred = !q.starred; touch(q); persist(true); render(); toast(q.starred ? 'Starred: moved to the top' : 'Star removed'); },
+    'q-star': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (!q) return; q.starred = !q.starred; touch(q); persist(true); toast(q.starred ? 'Quote starred' : 'Star removed'); if (ui.page === 'journal') render(); else quoteRefresh(); },
     'q-open': () => { ui.page = 'journal'; ui.jr.tab = 'quotes'; render(); },
     'q-shuffle': () => {
-      const pool = quotesLive().filter((q) => q.pinned);
-      if (pool.length === 1) { toast('Only one quote is pinned. Unpin it or pin more to shuffle.'); return; }
+      const all = quotesLive(), pin = all.filter((q) => q.pinned), star = all.filter((q) => q.starred), pool = pin.length ? pin : star;
+      if (pool.length === 1) { toast(pin.length ? 'Only one quote is pinned. Unpin it or pin more to shuffle.' : 'Only one quote is starred. Star more to shuffle.'); return; }
       const q = pickQuote(quoteId); if (!q) return; quoteId = q.id; quoteRefresh();
     },
     'q-pin': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (!q) return; q.pinned = !q.pinned; touch(q); persist(true); toast(q.pinned ? 'Quote pinned' : 'Quote unpinned'); if (ui.page === 'journal') render(); else quoteRefresh(); },
@@ -5104,6 +5153,6 @@
     bkInit();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { startTimer, rndText, roundNow, APP_VERSION, get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
+    window.__st = { famOf, startTimer, rndText, roundNow, APP_VERSION, get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();

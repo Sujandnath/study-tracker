@@ -998,3 +998,16 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
 .star-btn { font-size: 16px; line-height: 1; padding: 6px 10px; color: #94a3b8; }
 .star-btn.on { color: #f59e0b; border-color: #fcd34d; background: #fffbeb; }
 .qrow.starred { box-shadow: inset 3px 0 0 #f59e0b; }
+
+/* v71: families + fold buttons */
+.grp-head.fold, .fam-head { cursor: pointer; user-select: none; }
+.grp-head .car, .fam-head .car { font-style: normal; width: 14px; color: var(--muted); }
+.grp-head.fold:hover { color: var(--blue, #2563eb); }
+.fam-head { display: flex; align-items: center; gap: 8px; padding: 10px 4px; border-bottom: 1px solid #e2e8f0; font-size: 14px; }
+.fam-head small { color: var(--muted); margin-left: auto; }
+.list-row.fam-child { margin-left: 22px; border-left: 2px solid #dbeafe; padding-left: 12px; }
+.fold-btn { border: 0; background: transparent; color: #94a3b8; cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 6px; transition: transform .15s; flex-shrink: 0; }
+.fold-btn:hover { background: #f1f5f9; color: #334155; }
+.card.folded > h2 { margin-bottom: 0; }
+.card.folded > *:not(h2) { display: none !important; }
+.card.folded > h2 .fold-btn { transform: rotate(-90deg); }
