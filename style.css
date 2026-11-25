@@ -1011,3 +1011,49 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
 .card.folded > h2 { margin-bottom: 0; }
 .card.folded > *:not(h2) { display: none !important; }
 .card.folded > h2 .fold-btn { transform: rotate(-90deg); }
+
+/* ---------- v72: rich journal + pinned phone bar ---------- */
+.rt { border: 1px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
+.rt:focus-within { border-color: #93b4f6; box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+.rt-bar { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px; border-bottom: 1px solid var(--line); background: #f8fafc; position: sticky; top: 0; z-index: 2; }
+.rt-b { min-width: 34px; height: 34px; padding: 0 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; font-size: 15px; color: var(--ink); display: inline-flex; align-items: center; justify-content: center; }
+.rt-b:hover { background: #eaf1fe; }
+.rt-b.on { background: #dbe7fd; border-color: #b6cdf8; color: #1d4ed8; }
+.rt-hl { background: #fde68a; padding: 0 4px; border-radius: 3px; font-weight: 700; }
+.rt-ed { position: relative; padding: 12px 14px; outline: none; line-height: 1.65; word-break: break-word; }
+.rt-ed.empty::before { content: attr(data-ph); color: #94a3b8; pointer-events: none; position: absolute; }
+.rt-ed h3, .jr-text.rich h3 { font-size: 20px; font-weight: 800; margin: 14px 0 4px; line-height: 1.3; }
+.rt-ed h4, .jr-text.rich h4 { font-size: 16px; font-weight: 700; margin: 10px 0 2px; color: #1e3a8a; }
+.rt-ed hr, .jr-text.rich hr { border: 0; border-top: 2px solid var(--line); margin: 14px 0; }
+.rt-ed ul, .rt-ed ol, .jr-text.rich ul, .jr-text.rich ol { margin: 4px 0; padding-left: 24px; }
+.rt-ed mark, .jr-text.rich mark { background: #fde68a; border-radius: 3px; padding: 0 2px; color: inherit; }
+.jr-text.rich { white-space: normal; }
+.jr-text.rich.clamp { display: block; max-height: 11em; overflow: hidden; -webkit-line-clamp: unset; }
+.jr-pin { font-size: 14px; }
+.btn.sm.on { background: #dbe7fd; border-color: #b6cdf8; color: #1d4ed8; }
+.modal.wide { max-width: 640px; }
+.jrv-body { padding: 4px 0 8px; }
+.jrv-h { margin: 14px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.jrv-tiles { grid-template-columns: repeat(3, 1fr); }
+.jrv-top { margin-top: 10px; display: grid; gap: 4px; }
+.jrv-row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+@media (max-width: 760px) {
+  html, body { overflow: hidden; overscroll-behavior: none; }
+  .app { position: fixed; inset: 0; height: auto; }
+  .side { position: relative; z-index: 30; }
+  main { overscroll-behavior-y: contain; }
+  .jrv-tiles { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ---------- v73: journal PIN lock ---------- */
+.jr-lock { padding: 30px 20px; }
+.jr-lockbox { text-align: center; display: grid; gap: 8px; justify-items: center; }
+.jl-ic { font-size: 34px; }
+.pin-in { width: 170px; text-align: center; font-size: 28px; letter-spacing: .5em; padding: 10px 8px 10px 20px; }
+.pin-in.shake { animation: pinshake .35s; }
+@keyframes pinshake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+.pin-err { min-height: 18px; color: #dc2626; font-size: 13px; font-weight: 600; }
+.jl-forgot { margin-top: 4px; }
+.jr-lockline { display: flex; align-items: center; gap: 10px; padding: 14px; background: #f1f5f9; border-radius: 12px; font-weight: 600; }
+.jr-lockline span { flex: 1; }
+@media (prefers-reduced-motion: reduce) { .pin-in.shake { animation: none; } }

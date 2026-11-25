@@ -272,7 +272,7 @@
     page: 'today',
     date: todayStr(),
     tt: { date: null, view: (() => { try { return localStorage.getItem('st-tt-view') === 'list' ? 'list' : 'timeline'; } catch (e) { return 'timeline'; } })(), scope: 'onward', scrollNow: false, sugg: null },
-    jr: { q: '', month: 'all', tab: 'entries' },
+    jr: { q: '', month: 'all', tab: 'entries' }, jrUnlocked: false, jrFails: 0, jrUntil: 0,
     donut: { mode: 'type', sel: null },
     imp: { text: false },
     lib: { org: false, sel: [] },
@@ -460,7 +460,7 @@
       sync.last = Date.now(); saveSyncCfg(); store.save(data);
       setSyncStatus('');
       if (changedHere) {
-        const busyInput = /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '') || $('#modal-root').innerHTML;
+        const busyInput = typingNow() || $('#modal-root').innerHTML;
         if (!busyInput) render();
       }
     } catch (e) {
@@ -717,7 +717,7 @@
     if (focusLocked() !== lockApplied) { render(); return; }
     if ((ui.page === 'timetable' || ui.page === 'today') && nowMs - lastLive > 30000) {
       lastLive = nowMs;
-      const busy = drag || $('#modal-root').innerHTML || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '');
+      const busy = drag || $('#modal-root').innerHTML || typingNow();
       if (!busy) { render(); return; }
     }
     if (!t) { mini.hidden = true; return; }
@@ -1123,7 +1123,7 @@
         <div class="rd"><b>${parseYmd(d).toLocaleDateString('en-IN', { weekday: 'short' })}</b><span class="note">${parseYmd(d).getDate()}</span></div>
         <div class="rs">${w.perDay[d].study ? short(w.perDay[d].study) : '–'}</div>
         <div class="rm">${ci.mood ? MOODS[ci.mood - 1][0] : ''}${ci.focus ? `<span class="ftag">F${ci.focus}</span>` : ''}${isRest(d) ? '<span class="pill rest">Rest</span>' : ''}</div>
-        <div class="rj note">${jt ? esc(jt.length > 150 ? jt.slice(0, 150) + '…' : jt) : '<i>no journal entry</i>'}</div>
+        <div class="rj note">${jt ? (jrLocked() ? '<i>🔒 locked</i>' : esc(jt.length > 150 ? jt.slice(0, 150) + '…' : jt)) : '<i>no journal entry</i>'}</div>
       </div>`;
     }).join('');
     const hi = [];
@@ -1558,7 +1558,6 @@
     const ds = dayStats(d), tot = ds.tot;
     const goal = goalSecOn(d);
     const pct = goal ? Math.min(100, tot.study / goal * 100) : 0;
-    const journal = (data.journal[d] && data.journal[d].text) || '';
 
     return `
       <div class="page-head">
@@ -1586,8 +1585,8 @@
           ${summaryCard(d)}
           <div class="card">
             <h2>Journal <button class="linkbtn" data-action="nav" data-page="journal">All entries →</button></h2>
-            <textarea data-bind="journal" placeholder="How did the day go? What clicked, what to revisit…">${esc(journal)}</textarea>
-            <p class="note" style="margin-top:8px">Saved automatically. Every day's entry is kept on the <b>Journal</b> page.</p>
+            ${jrLocked() ? '<div class="jr-lockline">🔒 <span>Journal is locked</span> <button class="btn sm primary" data-action="jr-unlock">Unlock</button></div>' : `${rtEditor('', rtOf(data.journal[d]), 'journal-rt', 'How did the day go? What clicked, what to revisit…', 130)}
+            <p class="note" style="margin-top:8px">Saved automatically. Every day's entry is kept on the <b>Journal</b> page.</p>`}
           </div>
           ${checkinCard(d)}
         </div>
@@ -2359,8 +2358,10 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 71, APP_DATE = '23 Nov 2026';
+  const APP_VERSION = 73, APP_DATE = '26 Nov 2026';
   const CHANGELOG = [
+    [73, '26 Nov', 'Journal PIN lock: set a 4-digit PIN to lock the Journal entries (also hidden on Today and the weekly review). It relocks when you leave the app for 2 minutes. Forgot PIN: the lock can be removed after 24 hours.'],
+    [72, '26 Nov', 'Journal: a formatting toolbar (bold, italic, underline, highlight, headings, bullets, numbers, dividers), up to 4 pinned entries kept at the top, and a View button that shows the entry with that day\'s stats. The bottom bar on the phone stays pinned.'],
     [71, '25 Nov', 'Topic families: Percentage, Percentage v2, Percentage part 3 are grouped by name (Group as… in Edit topic to change it). Suggestions offer the best version only, the Topics list folds them, and the start-card chips show one per family. Fold buttons on subjects, families and on the cards of the Today, Timetable, Progress, Rewards and Topics pages, remembered on each device.'],
     [70, '25 Nov', 'Today quote: a ☆ star button next to the quote, and starred quotes are what Today picks from (unless you have pinned quotes).'],
     [69, '25 Nov', 'Quotes: a ★ star on every quote keeps your favourites at the top of the Quotes list.'],
@@ -2943,8 +2944,7 @@
   // keep statuses ("Upcoming" -> "Now" -> "Missed") fresh while the page is open
   setInterval(() => {
     if (ui.page !== 'timetable' || drag || document.hidden) return;
-    const ae = (document.activeElement || {}).tagName || '';
-    if (/INPUT|TEXTAREA|SELECT/.test(ae) || $('#modal-root').innerHTML) return;
+    if (typingNow() || $('#modal-root').innerHTML) return;
     render();
   }, 30000);
 
@@ -3272,6 +3272,169 @@
   // =====================================================================
   //  JOURNAL PAGE
   // =====================================================================
+
+  // =====================================================================
+  //  RICH TEXT (journal): tiny whitelist-based editor, no libraries
+  // =====================================================================
+  const typingNow = () => { const a = document.activeElement || {}; return /INPUT|TEXTAREA|SELECT/.test(a.tagName || '') || !!a.isContentEditable; };
+  const RT_TAGS = new Set(['B', 'I', 'U', 'MARK', 'H3', 'H4', 'UL', 'OL', 'LI', 'DIV', 'P']);
+  // Turns any pasted/edited HTML into a safe subset (no attributes, no scripts). q highlights search hits.
+  function rtClean(html, q) {
+    const doc = new DOMParser().parseFromString('<body>' + String(html || '') + '</body>', 'text/html');
+    const walk = (n) => {
+      let o = '';
+      n.childNodes.forEach((c) => {
+        if (c.nodeType === 3) { o += q ? hl(c.nodeValue, q) : esc(c.nodeValue); return; }
+        if (c.nodeType !== 1) return;
+        let t = c.tagName;
+        if (t === 'SCRIPT' || t === 'STYLE') return;
+        if (t === 'BR') { o += '<br>'; return; }
+        if (t === 'HR') { o += '<hr>'; return; }
+        let inner = walk(c);
+        if (t === 'STRONG') t = 'B';
+        if (t === 'EM') t = 'I';
+        if (t === 'SPAN' || t === 'FONT') {
+          const st = c.getAttribute('style') || '';
+          if (/font-weight:\s*(bold|[6-9]00)/i.test(st)) inner = '<b>' + inner + '</b>';
+          if (/font-style:\s*italic/i.test(st)) inner = '<i>' + inner + '</i>';
+          if (/text-decoration[^;]*underline/i.test(st)) inner = '<u>' + inner + '</u>';
+          o += inner; return;
+        }
+        if (RT_TAGS.has(t)) { const l = t.toLowerCase(); o += '<' + l + '>' + inner + '</' + l + '>'; } else o += inner;
+      });
+      return o;
+    };
+    return walk(doc.body).replace(/^(?:<div><br><\/div>|<br>)+|(?:<div><br><\/div>|<br>)+$/g, '').trim();
+  }
+  // Plain-text version of the formatted entry (used for search, word counts, points, previews)
+  function rtText(html) {
+    const doc = new DOMParser().parseFromString('<body>' + String(html || '') + '</body>', 'text/html');
+    const BLOCK = new Set(['DIV', 'P', 'H3', 'H4', 'LI', 'UL', 'OL']);
+    let out = '';
+    const nl = () => { if (out && !out.endsWith('\n')) out += '\n'; };
+    const walk = (n) => n.childNodes.forEach((c) => {
+      if (c.nodeType === 3) { out += c.nodeValue; return; }
+      if (c.nodeType !== 1) return;
+      if (c.tagName === 'BR') { out += '\n'; return; }
+      if (c.tagName === 'HR') { nl(); return; }
+      const blk = BLOCK.has(c.tagName);
+      if (blk) nl();
+      if (c.tagName === 'LI') out += (c.parentNode && c.parentNode.tagName === 'OL' ? (Array.prototype.indexOf.call(c.parentNode.children, c) + 1) + '. ' : '• ');
+      walk(c);
+      if (blk) nl();
+    });
+    walk(doc.body);
+    return out.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  const rtFromText = (t) => esc(t || '').replace(/\n/g, '<br>');
+  const rtOf = (j) => (j && j.html) ? rtClean(j.html) : rtFromText(j && j.text);
+  const RT_BTNS = [['bold', '<b>B</b>', 'Bold (Ctrl+B)'], ['italic', '<i>I</i>', 'Italic (Ctrl+I)'], ['underline', '<u>U</u>', 'Underline (Ctrl+U)'], ['mark', '<span class="rt-hl">A</span>', 'Highlight'],
+    ['h3', 'H', 'Heading'], ['h4', 'h', 'Sub-heading'], ['ul', '•', 'Bullet list'], ['ol', '1.', 'Numbered list'], ['hr', '―', 'Divider line']];
+  function rtEditor(id, html, bind, ph, minH) {
+    return `<div class="rt"><div class="rt-bar" role="toolbar" aria-label="Formatting">${RT_BTNS.map(([c, l, t]) => `<button type="button" class="rt-b" data-action="rt-cmd" data-cmd="${c}" title="${esc(t)}" aria-label="${esc(t)}">${l}</button>`).join('')}</div>
+      <div class="rt-ed ${html ? '' : 'empty'}" ${id ? `id="${id}"` : ''} contenteditable="true" role="textbox" aria-multiline="true" ${bind ? `data-bind="${bind}"` : ''} data-ph="${esc(ph || '')}" style="min-height:${minH || 130}px">${html || ''}</div></div>`;
+  }
+  const rtEmpty = (ed) => !ed.textContent.trim() && !ed.querySelector('hr,li');
+  function rtCmd(cmd, bar) {
+    const ed = $('.rt-ed', bar.closest('.rt')); if (!ed) return;
+    if (document.activeElement !== ed) ed.focus();
+    const sel = window.getSelection();
+    if (cmd === 'bold' || cmd === 'italic' || cmd === 'underline') document.execCommand(cmd);
+    else if (cmd === 'ul') document.execCommand('insertUnorderedList');
+    else if (cmd === 'ol') document.execCommand('insertOrderedList');
+    else if (cmd === 'h3' || cmd === 'h4') {
+      const cur = String(document.queryCommandValue('formatBlock') || '').toLowerCase();
+      document.execCommand('formatBlock', false, cur === cmd ? 'div' : cmd);
+    } else if (cmd === 'hr') {
+      document.execCommand('insertHorizontalRule');
+      ed.querySelectorAll('hr').forEach((h) => { if (!h.nextSibling) { const d = document.createElement('div'); d.appendChild(document.createElement('br')); h.after(d); const r = document.createRange(); r.setStart(d, 0); r.collapse(true); sel.removeAllRanges(); sel.addRange(r); } });
+    } else if (cmd === 'mark' && sel.rangeCount) {
+      let n = sel.anchorNode; while (n && n !== ed && !(n.nodeType === 1 && n.tagName === 'MARK')) n = n.parentNode;
+      if (n && n.tagName === 'MARK') { const f = document.createDocumentFragment(); while (n.firstChild) f.appendChild(n.firstChild); n.replaceWith(f); }
+      else if (!sel.isCollapsed) { const r = sel.getRangeAt(0), m = document.createElement('mark'); m.appendChild(r.extractContents()); r.insertNode(m); sel.removeAllRanges(); const r2 = document.createRange(); r2.selectNodeContents(m); sel.addRange(r2); }
+      else toast('Select some text first');
+    }
+    ed.classList.toggle('empty', rtEmpty(ed));
+    ed.dispatchEvent(new Event('input', { bubbles: true }));
+    rtState();
+  }
+  // lights up the toolbar buttons that match the text under the cursor
+  function rtState() {
+    const sel = window.getSelection(), a = sel && sel.anchorNode, ed = a && (a.nodeType === 1 ? a : a.parentNode).closest && (a.nodeType === 1 ? a : a.parentNode).closest('.rt-ed');
+    document.querySelectorAll('.rt-b.on').forEach((b) => b.classList.remove('on'));
+    if (!ed) return;
+    const bar = $('.rt-bar', ed.closest('.rt')), on = (c, v) => { const b = $('[data-cmd=' + c + ']', bar); if (b) b.classList.toggle('on', !!v); };
+    let blk = String(document.queryCommandValue('formatBlock') || '').toLowerCase(), n = a; let inMark = false;
+    while (n && n !== ed) { if (n.nodeType === 1 && n.tagName === 'MARK') inMark = true; n = n.parentNode; }
+    on('bold', document.queryCommandState('bold')); on('italic', document.queryCommandState('italic')); on('underline', document.queryCommandState('underline'));
+    on('ul', document.queryCommandState('insertUnorderedList')); on('ol', document.queryCommandState('insertOrderedList')); on('h3', blk === 'h3'); on('h4', blk === 'h4'); on('mark', inMark);
+  }
+  document.addEventListener('selectionchange', () => { try { rtState(); } catch (e) {} });
+  document.addEventListener('mousedown', (e) => { if (e.target.closest && e.target.closest('.rt-bar')) e.preventDefault(); });
+  document.addEventListener('paste', (e) => {
+    const ed = e.target.closest && e.target.closest('.rt-ed'); if (!ed) return;
+    e.preventDefault();
+    const t = (e.clipboardData || window.clipboardData).getData('text/plain');
+    if (t) document.execCommand('insertText', false, t);
+  });
+  // saves an entry, keeping its pin
+  function jrSave(d, html) {
+    html = rtClean(html);
+    const text = rtText(html), cur = data.journal[d];
+    if (!text && !cur) return;
+    const rec = { ...(cur || {}), html, text, updatedAt: Date.now() };
+    if (!text) delete rec.pinned;
+    data.journal[d] = rec;
+  }
+
+
+  // =====================================================================
+  //  JOURNAL PIN LOCK (a privacy screen, not encryption: entries are still stored as normal)
+  // =====================================================================
+  const jrHasLock = () => !!(data.settings.jrLock && data.settings.jrLock.hash);
+  const jrLocked = () => jrHasLock() && !ui.jrUnlocked;
+  async function pinHash(pin, salt) {
+    const buf = new TextEncoder().encode(salt + ':' + pin);
+    if (window.crypto && crypto.subtle) { const h = await crypto.subtle.digest('SHA-256', buf); return Array.from(new Uint8Array(h)).map((b) => b.toString(16).padStart(2, '0')).join(''); }
+    let x = 5381; buf.forEach((b) => { x = ((x << 5) + x + b) | 0; }); return 'f' + (x >>> 0).toString(16);
+  }
+  const pinCheck = async (pin) => { const l = data.settings.jrLock; return !!l && (await pinHash(pin, l.salt)) === l.hash; };
+  const pinInput = (id) => `<input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off" class="pin-in" id="${id}" ${id === 'jr-pin' ? 'data-bind="jr-pin"' : ''} aria-label="4-digit PIN" placeholder="••••">`;
+  function jrLockBody() {
+    const l = data.settings.jrLock || {}, now = Date.now();
+    const hrs = l.resetAt ? Math.max(1, Math.ceil((l.resetAt - now) / 3600000)) : 0;
+    const forgot = !l.resetAt ? '<button class="linkbtn" data-action="jr-forgot">Forgot PIN?</button>'
+      : l.resetAt <= now ? '<button class="btn danger sm" data-action="jr-lock-reset">Remove the lock now</button> <button class="linkbtn" data-action="jr-forgot-cancel">Keep it</button>'
+      : `<span class="note">You can remove the lock in about ${hrs} ${hrs === 1 ? 'hour' : 'hours'}.</span> <button class="linkbtn" data-action="jr-forgot-cancel">Cancel</button>`;
+    return `<div class="jr-lockbox"><div class="jl-ic">🔒</div><b>Journal is locked</b><p class="note">Enter your 4-digit PIN</p>${pinInput('jr-pin')}<div class="pin-err" id="jr-err" role="alert"></div><div class="jl-forgot">${forgot}</div></div>`;
+  }
+  function jrUnlockModal() {
+    $('#modal-root').innerHTML = `<div class="overlay" data-action="modal-bg"><div class="modal" role="dialog" aria-label="Unlock journal">${jrLockBody()}<div class="foot"><button class="btn" data-action="modal-close">Cancel</button></div></div></div>`;
+    const i = $('#jr-pin'); if (i) i.focus();
+  }
+  function jrPinModal() {
+    const has = jrHasLock();
+    openModal(has ? 'Journal PIN' : 'Set a journal PIN', has
+      ? `<p class="note" style="margin-bottom:10px">Change the PIN, or leave the new PIN empty to remove the lock.</p>
+         <div class="field"><label>Current PIN</label>${pinInput('pn-cur')}</div><div class="field"><label>New PIN (4 digits)</label>${pinInput('pn-a')}</div><div class="field"><label>Repeat new PIN</label>${pinInput('pn-b')}</div>`
+      : `<p class="note" style="margin-bottom:10px">A 4-digit PIN hides your journal entries on this device and your others. It is a privacy screen, not encryption.</p>
+         <div class="field"><label>New PIN (4 digits)</label>${pinInput('pn-a')}</div><div class="field"><label>Repeat PIN</label>${pinInput('pn-b')}</div>`,
+    () => false, has ? 'Save' : 'Turn on lock');
+    $('#modal-save').onclick = async () => {
+      const a = $('#pn-a').value, b = $('#pn-b').value;
+      if (has && !(await pinCheck($('#pn-cur').value))) { toast('Current PIN is wrong'); return; }
+      if (has && !a && !b) { delete data.settings.jrLock; touch(data.settings); persist(true); closeModal(); render(); toast('Journal lock removed'); return; }
+      if (!/^\d{4}$/.test(a)) { toast('The PIN must be exactly 4 digits'); return; }
+      if (a !== b) { toast("The two PINs don't match"); return; }
+      const salt = uid(); data.settings.jrLock = { salt, hash: await pinHash(a, salt) }; touch(data.settings);
+      ui.jrUnlocked = true; persist(true); closeModal(); render(); toast(has ? 'PIN changed' : 'Journal lock is on');
+    };
+  }
+  let jrHidAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { jrHidAt = Date.now(); return; }
+    if (jrHasLock() && ui.jrUnlocked && jrHidAt && Date.now() - jrHidAt > 120000) { ui.jrUnlocked = false; if (!typingNow() && !$('#modal-root').innerHTML) render(); }
+  });
   const monthLabel = (m) => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }); };
   function hl(text, q) {
     if (!q) return esc(text);
@@ -3284,20 +3447,20 @@
     }
     return out + esc(text.slice(last));
   }
-  const journalAll = () => Object.entries(data.journal).filter(([, j]) => j && String(j.text || '').trim()).map(([d, j]) => ({ d, text: j.text })).sort((x, y) => (x.d < y.d ? 1 : -1));
+  const journalAll = () => Object.entries(data.journal).filter(([, j]) => j && String(j.text || '').trim()).map(([d, j]) => ({ d, text: j.text, html: j.html || '', pinned: !!j.pinned })).sort((x, y) => (x.pinned === y.pinned ? (x.d < y.d ? 1 : -1) : (x.pinned ? -1 : 1)));
   function journalView() {
     const q = ui.jr.q.trim(), ql = q.toLowerCase(), all = journalAll();
     const list = all.filter((e) => (ui.jr.month === 'all' || e.d.startsWith(ui.jr.month)) && (!q || e.text.toLowerCase().includes(ql) || fmtLong(e.d).toLowerCase().includes(ql)));
     const words = list.reduce((n, e) => n + (e.text.trim().match(/\S+/g) || []).length, 0);
-    const count = `${list.length} ${list.length === 1 ? 'entry' : 'entries'}${q || ui.jr.month !== 'all' ? ' found' : ''} · ${words} words`;
+    const nPin = all.filter((e) => e.pinned).length, count = `${list.length} ${list.length === 1 ? 'entry' : 'entries'}${q || ui.jr.month !== 'all' ? ' found' : ''} · ${words} words${nPin ? ' · ' + nPin + '/4 pinned' : ''}`;
     const html = list.length ? list.map((e) => {
       const study = totals(sessionsOn(e.d)).study, long = e.text.length > 320 || e.text.split('\n').length > 6;
       return `<div class="card jr-entry">
         <div class="jr-head">
-          <div><div class="jr-date">${fmtDow(e.d)}, ${fmtLong(e.d)}</div><div class="note">${study ? 'Studied ' + short(study) : 'No study logged'}</div></div>
-          <div class="row tight"><button class="btn sm" data-action="jr-open" data-date="${e.d}">Open day</button><button class="btn sm" data-action="jr-edit" data-date="${e.d}">Edit</button></div>
+          <div><div class="jr-date">${e.pinned ? '<span class="jr-pin" title="Pinned">📌</span> ' : ''}${fmtDow(e.d)}, ${fmtLong(e.d)}</div><div class="note">${study ? 'Studied ' + short(study) : 'No study logged'}</div></div>
+          <div class="row tight"><button class="btn sm ${e.pinned ? 'on' : ''}" data-action="jr-pin" data-date="${e.d}">${e.pinned ? 'Unpin' : 'Pin'}</button><button class="btn sm" data-action="jr-view" data-date="${e.d}">View</button><button class="btn sm" data-action="jr-open" data-date="${e.d}">Open day</button><button class="btn sm" data-action="jr-edit" data-date="${e.d}">Edit</button></div>
         </div>
-        <div class="jr-text ${long ? 'clamp' : ''}">${hl(e.text, q)}</div>
+        <div class="jr-text ${e.html ? 'rich' : ''} ${long ? 'clamp' : ''}">${e.html ? rtClean(e.html, q) : hl(e.text, q)}</div>
         ${long ? '<button class="linkbtn" data-action="jr-more">Read more</button>' : ''}
       </div>`;
     }).join('') : `<div class="card"><div class="empty"><b>${all.length ? 'No entries match' : 'No journal entries yet'}</b>${all.length ? 'Try a different word or month.' : 'Write in the Journal box on the Today page, or press New entry.'}</div></div>`;
@@ -3305,17 +3468,21 @@
   }
   function pageJournal() {
     const months = [...new Set(journalAll().map((e) => e.d.slice(0, 7)))];
-    const v = journalView(), qt = ui.jr.tab === 'quotes', nq = quotesLive().length;
+    const locked = jrLocked(), v = locked ? { html: '', count: 'Locked' } : journalView(), qt = ui.jr.tab === 'quotes', nq = quotesLive().length;
     const tabs = `<div class="controls" style="margin-bottom:12px"><div class="seg"><button class="${!qt ? 'on' : ''}" data-action="jr-tab" data-v="entries">Entries</button><button class="${qt ? 'on' : ''}" data-action="jr-tab" data-v="quotes">Quotes <small>${nq}</small></button></div></div>`;
     if (qt) return `
       <div class="page-head">
         <div><h1>Journal</h1><p class="sub">${nq} ${nq === 1 ? 'quote' : 'quotes'}</p></div>
         <button class="btn primary" data-action="jr-qnew">+ New quote</button>
       </div>${tabs}${quotesTabHtml()}`;
+    if (locked) return `
+      <div class="page-head">
+        <div><h1>Journal</h1><p class="sub">Locked</p></div>
+      </div>${tabs}<div class="card jr-lock">${jrLockBody()}</div>`;
     return `
       <div class="page-head">
         <div><h1>Journal</h1><p class="sub" id="jr-count">${v.count}</p></div>
-        <button class="btn primary" data-action="jr-new">+ New entry</button>
+        <div class="row tight">${jrHasLock() ? '<button class="btn" data-action="jr-lock-now">🔒 Lock</button><button class="btn" data-action="jr-pin-set">PIN…</button>' : '<button class="btn" data-action="jr-pin-set">🔒 Set PIN</button>'}<button class="btn primary" data-action="jr-new">+ New entry</button></div>
       </div>${tabs}
       <div class="controls">
         <input type="text" id="jr-q" data-bind="jr-q" placeholder="Search your journal…" value="${esc(ui.jr.q)}" style="max-width:340px">
@@ -3323,21 +3490,51 @@
       </div>
       <div id="jr-list" class="stack">${v.html}</div>`;
   }
+  function journalViewModal(d) {
+    const j = data.journal[d], ds = dayStats(d), tot = ds.tot, list = sessionsOn(d), goal = goalSecOn(d), ci = data.checkins[d] || {};
+    let pts = null; try { const x = computePoints().days[d]; pts = x ? x.total : null; } catch (e) { pts = null; }
+    const by = {}; list.filter((s) => kindOf(s.type) === 'study').forEach((s) => { const k = s.topic || 'Untitled'; by[k] = (by[k] || 0) + s.seconds; });
+    const top = Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    const tile = (k, v, sub) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
+    const pct = goal ? Math.round(tot.study / goal * 100) : null;
+    $('#modal-root').innerHTML = `
+      <div class="overlay" data-action="modal-bg">
+        <div class="modal wide" role="dialog" aria-label="Journal view">
+          <h3>${fmtDow(d)}, ${fmtLong(d)} ${j && j.pinned ? '📌' : ''}</h3>
+          <div class="jr-text rich jrv-body">${j && (j.html || j.text) ? (j.html ? rtClean(j.html) : esc(j.text).replace(/\n/g, '<br>')) : '<i class="note">No journal entry for this day.</i>'}</div>
+          <h4 class="jrv-h">That day in numbers${isRest(d) ? ' <span class="pill rest">Rest day</span>' : ''}</h4>
+          <div class="tiles jrv-tiles">
+            ${tile('Studied', tot.study ? short(tot.study) : '–', goal ? `${pct}% of ${short(goal)} goal` : '')}
+            ${tile('Points', pts === null ? '–' : (pts > 0 ? '+' : '') + pts, 'earned that day')}
+            ${tile('Breaks', (tot.break + ds.gapBreak) ? short(tot.break + ds.gapBreak) : '–', '')}
+            ${tile('Sleep', tot.sleep ? short(tot.sleep) : '–', '')}
+            ${tile('Mood', ci.mood ? MOODS[ci.mood - 1][0] + ' ' + MOODS[ci.mood - 1][1] : '–', ci.focus ? 'focus ' + ci.focus + ' / 5' : '')}
+            ${tile('Sessions', String(list.filter((s) => kindOf(s.type) === 'study').length), '')}
+          </div>
+          ${top.length ? `<div class="jrv-top">${top.map(([n, sec]) => `<div class="jrv-row"><span>${esc(n)}</span><b>${short(sec)}</b></div>`).join('')}</div>` : '<p class="note">No study logged that day.</p>'}
+          <div class="foot">
+            <button class="btn" data-action="modal-close">Close</button>
+            <button class="btn" data-action="jr-open" data-date="${d}">Open day</button>
+            <button class="btn primary" data-action="jr-edit" data-date="${d}">Edit</button>
+          </div>
+        </div>
+      </div>`;
+  }
   function journalModal(date) {
-    const isNew = !date, d = date || todayStr(), cur = (data.journal[d] && data.journal[d].text) || '';
+    const isNew = !date, d = date || todayStr();
     openModal(isNew ? 'New journal entry' : 'Journal · ' + fmtLong(d), `
       <div class="field"><label>Date</label><input type="date" id="j-date" value="${d}" ${isNew ? '' : 'disabled'}></div>
-      <div class="field"><label>Entry</label><textarea id="j-text" style="min-height:230px" placeholder="How did the day go? What clicked, what to revisit…">${esc(cur)}</textarea></div>
+      <div class="field"><label>Entry</label>${rtEditor('j-text', rtOf(data.journal[d]), '', 'How did the day go? What clicked, what to revisit…', 230)}</div>
       ${!isNew ? `<button class="btn danger sm" data-action="jr-del" data-date="${d}">Delete this entry</button>` : ''}`,
     () => {
-      const dd = $('#j-date').value, text = $('#j-text').value;
+      const dd = $('#j-date').value, text = rtText(rtClean($('#j-text').innerHTML));
       if (!dd) { toast('Pick a date'); return false; }
       if (isNew && data.journal[dd] && String(data.journal[dd].text || '').trim()) { toast('That day already has an entry. Open it with Edit.'); return false; }
       if (!text.trim() && !data.journal[dd]) { toast('Write something first'); return false; }
-      data.journal[dd] = { text, updatedAt: Date.now() };
+      jrSave(dd, $('#j-text').innerHTML);
       persist(true); render();
     });
-    const t = $('#j-text'); if (t) t.focus();
+    const t = $('#j-text'); if (t) { t.focus(); const r = document.createRange(); r.selectNodeContents(t); r.collapse(false); const sl = window.getSelection(); sl.removeAllRanges(); sl.addRange(r); }
   }
 
   // =====================================================================
@@ -4906,6 +5103,20 @@
     },
     'q-pin': (el) => { const q = live(data.quotes).find((x) => x.id === el.dataset.id); if (!q) return; q.pinned = !q.pinned; touch(q); persist(true); toast(q.pinned ? 'Quote pinned' : 'Quote unpinned'); if (ui.page === 'journal') render(); else quoteRefresh(); },
     'jr-edit': (el) => journalModal(el.dataset.date),
+    'jr-view': (el) => journalViewModal(el.dataset.date),
+    'jr-pin-set': () => jrPinModal(),
+    'jr-lock-now': () => { ui.jrUnlocked = false; render(); },
+    'jr-unlock': () => jrUnlockModal(),
+    'jr-forgot': () => { data.settings.jrLock.resetAt = Date.now() + 24 * 3600000; touch(data.settings); persist(true); render(); const m = $('#modal-root'); if (m.innerHTML) jrUnlockModal(); },
+    'jr-forgot-cancel': () => { delete data.settings.jrLock.resetAt; touch(data.settings); persist(true); render(); if ($('#modal-root').innerHTML) jrUnlockModal(); },
+    'jr-lock-reset': () => { const l = data.settings.jrLock; if (!l || !l.resetAt || l.resetAt > Date.now()) return; delete data.settings.jrLock; touch(data.settings); ui.jrUnlocked = true; persist(true); closeModal(); render(); toast('Journal lock removed'); },
+    'rt-cmd': (el) => rtCmd(el.dataset.cmd, el),
+    'jr-pin': (el) => {
+      const d = el.dataset.date, cur = data.journal[d]; if (!cur) return;
+      if (!cur.pinned && journalAll().filter((e) => e.pinned).length >= 4) { toast('You can pin up to 4 entries. Unpin one first.'); return; }
+      data.journal[d] = { ...cur, pinned: !cur.pinned, updatedAt: Date.now() };
+      persist(true); toast(cur.pinned ? 'Unpinned' : 'Pinned to the top'); render();
+    },
     'jr-open': (el) => { ui.date = el.dataset.date; ui.page = 'today'; render(); },
     'jr-more': (el) => {
       const t = el.previousElementSibling; if (!t) return;
@@ -4914,10 +5125,10 @@
     },
     'jr-del': (el) => {
       const d = el.dataset.date;
-      const prev = data.journal[d] && data.journal[d].text;
-      if (prev !== undefined) {
-        data.journal[d] = { text: '', updatedAt: Date.now() }; closeModal(); persist(true); render();
-        toast('Deleted journal entry', () => { data.journal[d] = { text: prev, updatedAt: Date.now() }; persist(true); render(); });
+      const prev = data.journal[d] && { ...data.journal[d] };
+      if (prev) {
+        data.journal[d] = { text: '', html: '', updatedAt: Date.now() }; closeModal(); persist(true); render();
+        toast('Deleted journal entry', () => { data.journal[d] = { ...prev, updatedAt: Date.now() }; persist(true); render(); });
       }
     },
 
@@ -4978,6 +5189,21 @@
     'imp-title': (el) => { data.important.title = el.value; data.important.titleAt = Date.now(); persist(); },
     'imp-item': (el) => { const it = data.important.items.find((x) => x.id === el.dataset.id); if (it) { it.text = el.value; touch(it); persist(); } },
     'run-comment': (el) => { if (data.timer) { data.timer.comment = el.value; data.timerUpdatedAt = Date.now(); persist(); } },
+    'jr-pin': async (el) => {
+      el.value = el.value.replace(/\D/g, ''); const err = $('#jr-err'); if (err) err.textContent = '';
+      if (el.value.length < 4) return;
+      if (ui.jrUntil > Date.now()) { el.value = ''; if (err) err.textContent = 'Too many tries. Wait a few seconds.'; return; }
+      if (await pinCheck(el.value)) {
+        ui.jrUnlocked = true; ui.jrFails = 0;
+        if (data.settings.jrLock.resetAt) { delete data.settings.jrLock.resetAt; touch(data.settings); persist(true); }
+        closeModal(); render(); return;
+      }
+      el.value = ''; ui.jrFails++;
+      if (ui.jrFails >= 5) { ui.jrFails = 0; ui.jrUntil = Date.now() + 30000; if (err) err.textContent = 'Too many tries. Try again in 30 seconds.'; }
+      else if (err) err.textContent = 'Wrong PIN';
+      el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake');
+    },
+    'journal-rt': (el) => { el.classList.toggle('empty', rtEmpty(el)); jrSave(ui.date, el.innerHTML); persist(); },
     journal: (el) => {
       const d = ui.date;
       if (!el.value.trim() && !data.journal[d]) return;
