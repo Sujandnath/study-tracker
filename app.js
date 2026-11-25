@@ -272,7 +272,7 @@
     page: 'today',
     date: todayStr(),
     tt: { date: null, view: (() => { try { return localStorage.getItem('st-tt-view') === 'list' ? 'list' : 'timeline'; } catch (e) { return 'timeline'; } })(), scope: 'onward', scrollNow: false, sugg: null },
-    jr: { q: '', month: 'all', tab: 'entries' }, jrUnlocked: false, jrFails: 0, jrUntil: 0,
+    jr: { q: '', month: 'all', tab: 'entries' }, jrUnlocked: false, jrFails: 0, jrUntil: 0, shop: { cat: 'all', sort: 'ready', more: false },
     donut: { mode: 'type', sel: null },
     imp: { text: false },
     lib: { org: false, sel: [] },
@@ -1579,6 +1579,7 @@
         <div class="stack">
           <div class="card ${focusLocked() ? 'timer-live' : ''}">${timerCard()}</div>
           ${upNextCard()}
+          ${isToday ? bossCard() : ''}
           ${dayTimelineCard(d)}
         </div>
         <div class="stack">
@@ -2358,8 +2359,10 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 73, APP_DATE = '26 Nov 2026';
+  const APP_VERSION = 75, APP_DATE = '26 Nov 2026';
   const CHANGELOG = [
+    [75, '26 Nov', 'Shop: rewards now live on their own Shop page (button on the points card) with an icon on every reward, ready-to-buy tags, filters and a short Redeemed history. Pick an icon when you add or edit a reward; if you do not, one is chosen from its name.'],
+    [74, '26 Nov', 'Weekly boss: each Monday a new boss appears. Beat it by Sunday (study hours = your last 2 weeks\' average +15%, study on 5 days, and every subject gets its share) for +300. It replaces the flat weekly target. Removed the points for focused sessions and deep work (focus ratings are just ratings now).'],
     [73, '26 Nov', 'Journal PIN lock: set a 4-digit PIN to lock the Journal entries (also hidden on Today and the weekly review). It relocks when you leave the app for 2 minutes. Forgot PIN: the lock can be removed after 24 hours.'],
     [72, '26 Nov', 'Journal: a formatting toolbar (bold, italic, underline, highlight, headings, bullets, numbers, dividers), up to 4 pinned entries kept at the top, and a View button that shows the entry with that day\'s stats. The bottom bar on the phone stays pinned.'],
     [71, '25 Nov', 'Topic families: Percentage, Percentage v2, Percentage part 3 are grouped by name (Group as… in Edit topic to change it). Suggestions offer the best version only, the Topics list folds them, and the start-card chips show one per family. Fold buttons on subjects, families and on the cards of the Today, Timetable, Progress, Rewards and Topics pages, remembered on each device.'],
@@ -3544,18 +3547,18 @@
   // =====================================================================
   // a study block pays in proportion to its planned length: blockM is the price of 1 hour, capped at 3 hours (older days keep the flat price)
   const blockPtsFor = (d, b, v, cfg) => d >= (cfg.blockFrom || '0000-00-00') ? Math.min(v.blockM * 3, Math.max(1, Math.round(v.blockM * blockDur(b) / 60))) : v.blockM;
-  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, moveMin: 20, move: 40, missMove: 10, activeBrk: 5, activeMax: 3, fuel: 5, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, roundBase: 10, roundStep: 5, roundCap: 40, routineCap: 10, subjDay: 30, subjMin: 20, missSubject: 5, focus: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, deep: 20, deepMin: 90, weak: 15, weakMin: 30, noMiss: 25, weekGoal: 80, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
+  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, moveMin: 20, move: 40, missMove: 10, activeBrk: 5, activeMax: 3, fuel: 5, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, roundBase: 10, roundStep: 5, roundCap: 40, routineCap: 10, subjDay: 30, subjMin: 20, missSubject: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, weak: 15, weakMin: 30, noMiss: 25, boss: 300, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
   const PT_LABELS = [
     ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['moveMin', 'Move goal: minutes of workout in a day'], ['move', 'Move goal reached (workout)'], ['missMove', 'Move goal missed, no workout: penalty (not on rest days)'], ['activeBrk', 'Active break (8+ minutes of workout in a focus-round break): reward'], ['activeMax', 'Active break (workout): most counted per day'], ['fuel', 'Fuel bonus: percent extra on study-minute points on workout days (Move goal reached)'], ['meditate30', 'Meditation, per 30 minutes (paid per minute)'], ['meditateMax', 'Meditation: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
     ['blockM', 'Study block done: reward per hour of block length (30 min pays half, max 3 hours)'], ['routineCap', 'Routine logging (meals, shower…): maximum points per day'], ['roundBase', 'Focus round 2 reward (1h of study, then a break and back in 15 min)'], ['roundStep', 'Focus rounds: extra for each round after'], ['roundCap', 'Focus rounds: maximum reward'], ['subjDay', 'Every subject studied today: reward'], ['subjMin', 'Minutes of study per subject to count today'], ['missSubject', 'Subject skipped today: penalty each'],
-    ['focus', 'Focused session (rated 4–5, 30+ min)'], ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
+    ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
     ['missGoal', 'Missed goal: maximum penalty'], ['missBlock', 'Missed study block'], ['cap', 'Daily penalty cap'],
     ['earlyStart', 'Early start: first study within the window after waking'], ['earlyWin', 'Early start window (minutes after waking)'],
     ['wakeSteady', 'Steady wake time (within the window of your usual week)'], ['wakeWin', 'Steady wake window (minutes)'],
-    ['revise', 'Revision: study a topic last covered 3+ days ago (10+ min)'], ['deep', 'Deep work: one session at least this long, rated 4–5'], ['deepMin', 'Deep work session length (minutes)'],
+    ['revise', 'Revision: study a topic last covered 3+ days ago (10+ min)'], 
     ['weak', 'Weak subject: time on your least-studied subject this week'], ['weakMin', 'Weak subject minutes needed'],
-    ['noMiss', 'No-miss day: every planned study block done (2+ blocks)'], ['weekGoal', 'Weekly study target reached'], ['weekGoalH', 'Weekly study target (hours)'],
+    ['noMiss', 'No-miss day: every planned study block done (2+ blocks)'], ['boss', 'Weekly boss defeated (hours = last 2 weeks average +15%, 5 study days, every subject)'], ['weekGoalH', 'Weekly boss starting target when there is no history (hours)'],
     ['perfectWeek', 'Perfect week: daily goal met on every non-rest day'], ['improve', 'Improvement: week beats last week by 10%+'],
     ['comeback', 'Comeback: study after a day with none'], ['comebackMin', 'Comeback minutes needed'],
     ['streak14', '14-day streak'], ['mile50', 'Milestone: 50 hours of study in total'], ['mile100', 'Milestone: 100 hours of study in total'], ['mile250', 'Milestone: 250 hours of study in total'],
@@ -3590,6 +3593,63 @@
   const sgn = (n) => (n > 0 ? '+' + n : n < 0 ? '−' + Math.abs(n) : '0');
 
   const isMeditation = (s) => /medit|mindful|breathwork|breathing|pranayam|dhyan/i.test(cat(s.type).name + ' ' + s.topic);
+
+  // =====================================================================
+  //  WEEKLY BOSS: one hard goal per Monday-to-Sunday week
+  //  Hours = average of the last 2 weeks +15%, 5 days with 1h+, every subject gets its share.
+  // =====================================================================
+  const BOSS_UP = 1.15, BOSS_DAYS = 5, BOSS_DAYSEC = 3600;
+  const BOSS_NAMES = ['The Iron Golem', 'The Hydra', 'The Minotaur', 'The Stone Titan', 'The Frost Giant', 'The Shadow Wyrm', 'The Cyclops', 'The Basilisk', 'The Kraken', 'The Phoenix', 'The Sphinx', 'The Chimera'];
+  function bossCtx() {
+    const tm = data.timer, td = todayStr(), tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t]));
+    const subs = live(data.subjects).filter((s) => !s.noWeekly && live(data.topics).some((t) => t.subjectId === s.id));
+    const byDay = {}; let first = '9999-12-31';
+    live(data.sessions).forEach((s) => { if (kindOf(s.type) !== 'study') return; (byDay[s.date] = byDay[s.date] || []).push(s); if (s.date < first) first = s.date; });
+    const tmStudy = !!(tm && kindOf(tm.type) === 'study'), tmSec = tmStudy ? Math.round(elapsedMs(tm) / 1000) : 0;
+    const sOf = (x) => (byDay[x] || []).reduce((n, s) => n + s.seconds, 0) + (x === td ? tmSec : 0);
+    return { tm, td, tmap, subs, byDay, first, tmStudy, tmSec, sOf, tgt: {} };
+  }
+  function bossTarget(c, ws) {
+    if (c.tgt[ws] !== undefined) return c.tgt[ws];
+    const weeks = [];
+    for (let k = 1; k <= 2; k++) {
+      const w0 = addDays(ws, -7 * k); if (addDays(w0, 6) < c.first) continue;
+      let t = 0; for (let i = 0; i < 7; i++) t += c.sOf(addDays(w0, i)); weeks.push(t);
+    }
+    const avg = weeks.length ? weeks.reduce((n, x) => n + x, 0) / weeks.length : 0;
+    return (c.tgt[ws] = avg > 0 ? Math.max(5 * 3600, Math.round(avg * BOSS_UP / 1800) * 1800) : (ptv().weekGoalH || 20) * 3600);
+  }
+  // progress of the week starting ws, counting days ws..d
+  function bossAt(c, ws, d) {
+    const end = d < addDays(ws, 6) ? d : addDays(ws, 6), target = bossTarget(c, ws);
+    const need = Math.max(3600, Math.round(target * 0.10 / 900) * 900), ss = new Map(c.subs.map((x) => [x.id, 0]));
+    let hrs = 0, days = 0;
+    for (let x = ws; x <= end; x = addDays(x, 1)) {
+      const s = c.sOf(x); hrs += s; if (s >= BOSS_DAYSEC) days++;
+      (c.byDay[x] || []).forEach((se) => weeklySubjectIds(se, c.tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + se.seconds); }));
+      if (x === c.td && c.tmStudy) weeklySubjectIds(c.tm, c.tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + c.tmSec); });
+    }
+    const hOk = hrs >= target, dOk = days >= BOSS_DAYS, sOk = c.subs.every((x) => ss.get(x.id) >= need);
+    return { ws, target, hrs, days, ss, need, hOk, dOk, sOk, win: hOk && dOk && sOk };
+  }
+  function bossCard() {
+    const v = ptv(); if (!(v.boss > 0)) return '';
+    const c = bossCtx(), td = c.td, ws = weekStart(td), b = bossAt(c, ws, td), lastWs = addDays(ws, -7), lb = bossAt(c, lastWs, addDays(lastWs, 6));
+    const name = BOSS_NAMES[Math.floor(parseYmd(ws).getTime() / 604800000) % BOSS_NAMES.length];
+    const left = daysBetween(td, addDays(ws, 6)), hp = Math.max(0, 100 - b.hrs / b.target * 100), perDay = left > 0 ? Math.max(0, b.target - b.hrs) / left : 0;
+    const row = (ok, text) => `<div class="bs-row ${ok ? 'ok' : ''}"><span>${ok ? '✓' : '○'}</span>${text}</div>`;
+    const hadLast = addDays(lastWs, 6) >= c.first;
+    const status = b.win ? `<div class="bs-win">Defeated! +${v.boss} points</div>` : `<div class="note">${left} ${left === 1 ? 'day' : 'days'} left${!b.hOk ? ` · about <b>${short(Math.round(perDay))}</b> a day to finish the hours` : ''}</div>`;
+    return `<div class="card boss ${b.win ? 'won' : ''}">
+      <h2>⚔️ Weekly boss <small>${name} · +${v.boss}</small></h2>
+      <div class="bs-hp" title="Boss health"><i style="width:${hp}%"></i><span>${b.win ? 'Defeated' : Math.round(hp) + '% health left'}</span></div>
+      ${row(b.hOk, `Study <b>${short(b.hrs)}</b> of <b>${short(b.target)}</b>`)}
+      ${row(b.dOk, `Study 1h+ on <b>${Math.min(b.days, BOSS_DAYS)}</b> of ${BOSS_DAYS} days`)}
+      ${c.subs.length ? `<div class="bs-row ${b.sOk ? 'ok' : ''}"><span>${b.sOk ? '✓' : '○'}</span><div>Every subject at least <b>${short(b.need)}</b><div class="gl-chips" style="margin-top:6px">${c.subs.map((x) => { const got = b.ss.get(x.id), ok = got >= b.need; return `<span class="${ok ? 'ok' : 'no'}">${ok ? '✓' : '✗'} ${esc(x.name)}${ok ? '' : ' · ' + short(b.need - got) + ' left'}</span>`; }).join('')}</div></div></div>` : ''}
+      ${status}
+      ${hadLast ? `<div class="note bs-last">Last week: ${lb.win ? 'defeated ✓' : `not beaten (${short(lb.hrs)} of ${short(lb.target)}${!lb.dOk ? ', too few study days' : ''}${!lb.sOk ? ', a subject was short' : ''})`}</div>` : ''}
+    </div>`;
+  }
   // a study session counts toward the weekly "every subject" goal through its topic's subject (study only)
   function weeklySubjectIds(s, tmap) {
     if (kindOf(s.type) !== 'study') return [];
@@ -3619,6 +3679,7 @@
     const redBy = {}; reds.forEach((r) => { (redBy[r.date] = redBy[r.date] || []).push(r); });
     let first = start;
     studyDays.forEach((d) => { if (d < first) first = d; });
+    const bc = bossCtx();
     const studyBy = {}, wakeBy = {}, topicDates = new Map(), mocks = [];
     const mockScore = (t) => { const m = /(\d+(?:\.\d+)?)\s*(?:%|\/\s*(\d+(?:\.\d+)?))/.exec(t || ''); if (!m) return null; const x = parseFloat(m[1]); return m[2] ? x / parseFloat(m[2]) * 100 : x; };
     const isMock = (s) => kindOf(s.type) === 'study' && /\b(mock|test)\b/i.test(s.topic || '');
@@ -3691,8 +3752,6 @@
       const nd = doneH + doneM + doneL;
       if (nd) add(`${nd} study ${nd === 1 ? 'block' : 'blocks'} done`, bpts, 'earn');
       if (nb >= 2 && nd === nb && v.noMiss > 0) add('No-miss day', v.noMiss, 'earn');
-      const nf = list.filter((s) => kindOf(s.type) === 'study' && s.focus >= 4 && s.seconds >= 1800).length;
-      if (nf) add(`${nf} focused ${nf === 1 ? 'session' : 'sessions'}`, nf * v.focus, 'earn');
       const ci = data.checkins[d];
       if (ci && (ci.mood || ci.focus)) add('Evening check-in', v.checkin, 'earn');
       if (((data.journal[d] && data.journal[d].text) || '').trim()) add('Journal entry', v.journal, 'earn');
@@ -3713,7 +3772,6 @@
           const hit = studySess.filter((s) => s.seconds >= 600).map((s) => (s.topic || '').toLowerCase()).find((tp) => { const ds = topicDates.get(tp); if (!ds) return false; let prev = ''; ds.forEach((x) => { if (x < d && x > prev) prev = x; }); return prev && prev <= addDays(d, -3); });
           if (hit) add('Revision', v.revise, 'earn');
         }
-        if (v.deep > 0 && studySess.some((s) => s.seconds >= v.deepMin * 60 && s.focus >= 4)) add('Deep work', v.deep, 'earn');
         if (v.weak > 0 && studied && subs.length >= 2) {
           const tot = new Map(subs.map((s) => [s.id, 0])), today2 = new Map(subs.map((s) => [s.id, 0]));
           for (let i = 1; i <= 7; i++) (by[addDays(d, -i)] || []).forEach((s) => { if (kindOf(s.type) !== 'study') return; const t = tmap.get((s.topic || '').toLowerCase()); if (t && tot.has(t.subjectId)) tot.set(t.subjectId, tot.get(t.subjectId) + s.seconds); });
@@ -3722,10 +3780,7 @@
           if (mn < mx && [...tot.entries()].some(([id, x]) => x === mn && today2.get(id) >= v.weakMin * 60)) add('Weak subject', v.weak, 'earn');
         }
         const ws = weekStart(d);
-        if (v.weekGoal > 0 && v.weekGoalH > 0) {
-          let tot = 0; for (let x = ws; x <= d; x = addDays(x, 1)) tot += sOf(x);
-          if (tot >= v.weekGoalH * 3600 && tot - study < v.weekGoalH * 3600) add('Weekly study target reached', v.weekGoal, 'earn');
-        }
+        if (v.boss > 0) { const bw = bossAt(bc, ws, d); if (bw.win && !(d > ws && bossAt(bc, ws, addDays(d, -1)).win)) add('Weekly boss defeated', v.boss, 'earn'); }
         if (finished && parseYmd(d).getDay() === 0 && ws >= start) {
           if (v.perfectWeek > 0 && goal > 0) {
             let met = 0, ok = true; for (let x = ws; x <= d; x = addDays(x, 1)) { if (sOf(x) >= goalSecOn(x)) met++; else if (!isRest(x)) ok = false; }
@@ -3863,10 +3918,18 @@
     ['Loan fee waiver (no fee on your next loan)', 150, 'month', false, 'waiver']
   ];
   const NEW_SPECIALS = ['shield', 'disc', 'waiver'];
+  function rwIconPrev() {
+    const n = $('#rw-name'), i = $('#rw-icon'), pv = $('#rw-icon-prev'); if (!n || !i || !pv) return;
+    const sp = $('#rw-special'), ic = rwIcon({ name: n.value, icon: (i.value || '').trim(), special: sp ? sp.value : '' });
+    pv.textContent = ic; pv.style.background = rwTint(ic);
+  }
   function rewardModal(existing) {
     const r = existing || { name: '', cost: 100, limit: 'none', needsGoal: false, rise: 0 };
     openModal(existing ? 'Edit reward' : 'New reward', `
-      <div class="field"><label>Reward</label><input type="text" id="rw-name" value="${esc(r.name)}" placeholder="e.g. Movie night"></div>
+      <div class="field"><label>Reward</label><input type="text" id="rw-name" data-bind="rw-icon-prev" value="${esc(r.name)}" placeholder="e.g. Movie night"></div>
+      <div class="field"><label>Icon <span class="note">(leave empty to pick one from the name)</span></label>
+        <div class="rw-icon-row"><span class="shop-ic sm" id="rw-icon-prev" style="background:${rwTint(rwIcon(r))}">${esc(rwIcon(r))}</span><input type="text" id="rw-icon" data-bind="rw-icon-prev" maxlength="8" value="${esc(r.icon || '')}" placeholder="auto" style="width:90px;text-align:center"></div>
+        <div class="rw-emojis">${RW_EMOJIS.map((e) => `<button type="button" data-action="rw-pick" data-e="${e}">${e}</button>`).join('')}</div></div>
       <div class="row">
         <div class="field grow"><label>Cost (points)</label><input type="number" id="rw-cost" min="1" step="10" value="${r.cost}"></div>
         <div class="field grow"><label>Limit</label><select id="rw-limit">${Object.entries(LIMITS).map(([k, l]) => `<option value="${k}" ${(r.limit || 'none') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
@@ -3887,6 +3950,7 @@
       if (existing && ptLocked()) Object.assign(nv, old); // cost and rules stay as they were while locked
       Object.assign(rec, { name: nv.name, cost: nv.cost, limit: nv.limit, needsGoal: nv.needsGoal, rise: nv.rise, allowDebt: nv.allowDebt });
       if (nv.special) rec.special = nv.special; else delete rec.special;
+      { const ic = ($('#rw-icon').value || '').trim(); if (ic) rec.icon = ic; else delete rec.icon; }
       if (!existing) ptLog(`Added reward "${nv.name}" (${nv.cost} points)`);
       else {
         const ch = [];
@@ -4062,14 +4126,7 @@
         else if (left > 0) push({ id: 'early', name: 'Early start', pts: v.earlyStart, state: 'open', note: `Start studying within ${v.earlyWin} min of waking · ${left} min left`, urgent: true });
         else push({ id: 'early', name: 'Early start', pts: v.earlyStart, state: 'missed', note: `The window closed ${v.earlyWin} min after you woke at ${new Date(wake).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` });
       }
-      if (v.deep > 0) {
-        let best = Math.max(0, ...sess.filter((s) => kindOf(s.type) === 'study' && s.focus >= 4).map((s) => s.seconds));
-        if (earnedLabels.has('Deep work')) push({ id: 'deep', name: 'Deep work', pts: v.deep, state: 'done', dn: 'Deep session completed' });
-        else push({ id: 'deep', name: 'Deep work', pts: v.deep, state: 'open', pct: best / (v.deepMin * 60) * 100, note: `One session of ${short(v.deepMin * 60)}+ rated 4–5 · best so far ${short(best)}${best < v.deepMin * 60 ? ` (${short(v.deepMin * 60 - best)} more)` : ' · rate it 4–5 to count'}${v.deepMin * 60 > dayLeft ? ' · not reachable before midnight' : ''}` });
-      } }
-    // 6. focused sessions (a running count, never "done")
-    if (v.focus > 0) { const n = sess.filter((s) => kindOf(s.type) === 'study' && s.focus >= 4 && s.seconds >= 1800).length;
-      push({ id: 'focus', name: 'Focused sessions', pts: v.focus, state: 'count', note: `${n} so far (+${n * v.focus} earned) · each session rated 4–5 and 30+ min adds +${v.focus}` }); }
+    }
     // 7. daily ticks
     const ci = data.checkins[today];
     [['checkin', 'Evening check-in', v.checkin, !!(ci && (ci.mood || ci.focus)), 'Rate your mood and focus on the Today page'],
@@ -4142,6 +4199,75 @@
       </div>`;
   }
 
+
+  // =====================================================================
+  //  SHOP: the rewards, on their own page
+  // =====================================================================
+  const RW_EMOJIS = ['☕', '🍪', '🍎', '🍫', '🍦', '🥤', '🍕', '🍔', '🍽️', '🍿', '🎵', '🎧', '🎬', '🎮', '📱', '▶️', '📺', '📚', '🛍️', '👕', '🛌', '😴', '🚶', '🚗', '🏞️', '✈️', '🎁', '⏭️', '🛡️', '🏷️', '🧾', '⭐', '🏆', '🎉', '💆', '🧘', '🎨', '⚽', '🏏', '🎤'];
+  const RW_TINTS = ['#fef3c7', '#ffedd5', '#fce7f3', '#e0e7ff', '#dcfce7', '#cffafe', '#fee2e2', '#ede9fe', '#fef9c3', '#e0f2fe'];
+  const RW_GUESS = [[/snack|biscuit|cookie|chips|namkeen/i, '🍪'], [/ice.?cream/i, '🍦'], [/chocolate|sweet|dessert|candy/i, '🍫'], [/coffee|chai|\btea\b/i, '☕'], [/fruit/i, '🍎'],
+    [/cold drink|soda|juice|shake|drink/i, '🥤'], [/pizza/i, '🍕'], [/burger/i, '🍔'], [/movie night|popcorn/i, '🍿'], [/movie|film|netflix|series|\btv\b/i, '🎬'], [/dinner|lunch|meal|pizza|burger|biryani|food|restaurant/i, '🍽️'],
+    [/music|riding|ride|headphone/i, '🎧'], [/song|playlist/i, '🎵'], [/youtube|video|reels/i, '▶️'], [/social|instagram|facebook|insta|whatsapp|phone|mobile/i, '📱'], [/game|gaming/i, '🎮'],
+    [/book|stationery|pen|notebook/i, '📚'], [/trip|travel|outing|day out/i, '🏞️'], [/shopping|clothes|shirt|shoes/i, '🛍️'], [/nap|sleep/i, '😴'], [/walk|stroll/i, '🚶'], [/massage|spa/i, '💆']];
+  const RW_SPECIAL_ICON = { rest: '🛌', pass: '⏭️', shield: '🛡️', disc: '🏷️', waiver: '🧾' };
+  function rwIcon(r) {
+    if (r.icon) return r.icon;
+    if (r.special && RW_SPECIAL_ICON[r.special]) return RW_SPECIAL_ICON[r.special];
+    const hit = RW_GUESS.find(([re]) => re.test(r.name || '')); return hit ? hit[1] : '🎁';
+  }
+  const rwTint = (ic) => { let h = 0; Array.from(String(ic)).forEach((c) => { h = (h * 31 + c.codePointAt(0)) >>> 0; }); return RW_TINTS[h % RW_TINTS.length]; };
+  const SHOP_CATS = [['all', 'All'], ['treat', 'Treats'], ['screen', 'Screen time'], ['token', 'Tokens & passes'], ['big', 'Big rewards']];
+  function shopCat(r) {
+    if (r.special) return 'token';
+    if (r.cost >= 300) return 'big';
+    if (/youtube|social|instagram|facebook|reels|movie|film|netflix|series|\btv\b|game|gaming|phone|mobile|video|insta/i.test(r.name || '')) return 'screen';
+    return 'treat';
+  }
+  function pageShop() {
+    const pts = computePoints(), v = ptv(), today = pts.today, sh = ui.shop;
+    const all = live(data.rewards).map((r) => ({ r, st: rewardState(r, pts), cat: shopCat(r) }));
+    const cats = SHOP_CATS.filter(([k]) => k === 'all' || all.some((x) => x.cat === k));
+    if (!cats.some(([k]) => k === sh.cat)) sh.cat = 'all';
+    let list = all.filter((x) => sh.cat === 'all' || x.cat === sh.cat);
+    const price = (x) => (x.st.free ? 0 : x.st.price);
+    list.sort((a, b) => sh.sort === 'high' ? price(b) - price(a) : sh.sort === 'low' ? price(a) - price(b) : ((b.st.ok ? 1 : 0) - (a.st.ok ? 1 : 0)) || price(a) - price(b));
+    const nReady = all.filter((x) => x.st.ok).length;
+    const tokenNotes = (() => { const n = []; const rdb = restBought(today); if (rdb) n.push(`Rest day: every reward under ${rdb.cost} points is free today (once each)`);
+      redLive().filter((r) => r.special === 'shield' && (r.for || r.date) >= today).forEach((r) => n.push(`Streak shield active for ${(r.for || r.date) === today ? 'today' : fmtShort(r.for || r.date)}`));
+      if (discToken(today)) n.push(`Goal discount ready: ${v.discPct}% off your next goal-gated reward today`);
+      if (waiverToken()) n.push('Loan fee waiver ready: your next loan has no fee');
+      return n.length ? `<div class="pt-pending" style="margin:0 0 12px">${n.map((t) => `<div class="note">${esc(t)}</div>`).join('')}</div>` : ''; })();
+    const meta = (r, st) => `${LIMITS[r.limit || 'none']}${r.special === 'rest' ? ' · protects your streak' : r.special === 'pass' ? ' · skips today’s goal and its penalty' : r.special === 'shield' ? ' · a missed day will not break your streak' : r.special === 'disc' ? ` · ${v.discPct}% off your next goal reward today` : r.special === 'waiver' ? ' · your next loan has no fee' : ''}${st.free ? ' · free on your rest day' : ''}${r.needsGoal ? ' · after today’s goal' : ''}${r.rise ? ` · +${r.rise}% per use` : ''}`;
+    const card = ({ r, st }) => {
+      const ic = rwIcon(r), pct = st.free ? 100 : Math.min(100, pts.A / st.price * 100);
+      return `<div class="shop-it ${st.ok ? 'ready' : 'lock'}">
+        ${st.ok ? '<span class="shop-tag">READY</span>' : ''}
+        <span class="shop-price">${st.free ? 'Free' : st.price.toLocaleString('en-IN')}</span>
+        <div class="shop-ic" style="background:${rwTint(ic)}">${esc(ic)}</div>
+        <h3>${esc(r.name)}</h3><p>${esc(meta(r, st))}</p>
+        ${st.ok ? `<button class="btn primary" data-action="rw-redeem" data-id="${r.id}">Redeem</button>`
+          : `<div class="bar"><i style="width:${pct}%"></i></div><div class="shop-need">${esc(st.why)}</div>`}
+        <div class="shop-manage"><button class="linkbtn" data-action="rw-edit" data-id="${r.id}">Edit</button><button class="linkbtn dng" data-action="rw-del" data-id="${r.id}">Delete</button></div>
+      </div>`;
+    };
+    const hist = live(data.redemptions).sort((x, y) => (y.date > x.date ? 1 : y.date < x.date ? -1 : (y.updatedAt || 0) - (x.updatedAt || 0))).slice(0, 15);
+    const shown = sh.more ? hist : hist.slice(0, 5), rwById = new Map(live(data.rewards).map((r) => [r.id, r]));
+    const histHtml = hist.length ? `<div class="card shop-hist"><h2>Recently redeemed</h2>${shown.map((x) => { const rw = rwById.get(x.rewardId) || { name: x.name, special: x.special }, ic = rwIcon(rw);
+        return `<div class="sh-row"><span class="sh-ic" style="background:${rwTint(ic)}">${esc(ic)}</span><span class="sh-nm">${esc(x.name)}</span><span class="note">${fmtShort(x.date)}</span><b class="neg">${x.free ? 'Free' : '−' + x.cost}</b><button class="linkbtn" data-action="rd-undo" data-id="${x.id}">Undo</button></div>`; }).join('')}
+      ${hist.length > 5 ? `<button class="linkbtn" data-action="shop-more">${sh.more ? 'Show fewer' : `Show ${hist.length - 5} more`}</button>` : ''}</div>` : '';
+    return `
+      <button class="linkbtn shop-back" data-action="shop-back">← Rewards</button>
+      <div class="page-head"><div><h1>Shop</h1><p class="sub">Spend your points on things you enjoy</p></div>
+        <div class="shop-bal"><div><span class="lbl">Your points</span><b>${pts.A.toLocaleString('en-IN')}</b></div>${nReady ? `<span class="shop-n">${nReady} ready</span>` : ''}</div></div>
+      ${tokenNotes}
+      <div class="shop-bar"><div class="shop-chips">${cats.map(([k, l]) => `<button class="shop-pill ${sh.cat === k ? 'on' : ''}" data-action="shop-cat" data-v="${k}">${l}</button>`).join('')}</div>
+        <select data-change="shop-sort" aria-label="Sort" style="width:auto"><option value="ready" ${sh.sort === 'ready' ? 'selected' : ''}>Ready first</option><option value="low" ${sh.sort === 'low' ? 'selected' : ''}>Price: low to high</option><option value="high" ${sh.sort === 'high' ? 'selected' : ''}>Price: high to low</option></select>
+        <button class="btn primary" data-action="rw-add">+ New reward</button></div>
+      ${!live(data.rewards).some((r) => NEW_SPECIALS.includes(r.special)) && live(data.rewards).length ? '<div class="pt-pending" style="margin:0 0 12px"><div class="note">New special rewards are available: streak shield, goal discount and loan fee waiver. <button class="linkbtn" data-action="rw-add-specials">Add them</button></div></div>' : ''}
+      ${list.length ? `<div class="shop-grid">${list.map(card).join('')}</div>`
+        : `<div class="card"><div class="empty"><b>No rewards yet</b>Add things you would enjoy and set what they cost.<div style="margin-top:12px"><button class="btn sm" data-action="rw-suggest">Add suggested rewards</button></div></div></div>`}
+      ${histHtml}`;
+  }
   function pageRewards() {
     const pts = computePoints(), v = ptv(), today = pts.today, lv = levelOf(pts.L), cfg = data.pointsCfg;
     const td = pts.days[today];
@@ -4149,13 +4275,14 @@
     const wk = (from) => { let s = 0; for (let i = 0; i < 7; i++) { const x = pts.days[addDays(from, i)]; if (x) s += x.total; } return s; };
     const thisWk = weekStart(today), lastWk = addDays(thisWk, -7);
     const recent = Array.from({ length: 14 }, (_, i) => addDays(today, -(i + 1))).filter((d) => pts.days[d]);
-    const hist = live(data.redemptions).sort((x, y) => (y.date > x.date ? 1 : y.date < x.date ? -1 : (y.updatedAt || 0) - (x.updatedAt || 0))).slice(0, 10);
+    const nReady = rewards.filter((r) => rewardState(r, pts).ok).length;
 
     const header = `
       <div class="card pt-hero">
         <div class="pt-big"><div class="lbl">Available points</div><div class="num">${pts.A.toLocaleString('en-IN')}</div>
           <div class="note">Lifetime score ${pts.L.toLocaleString('en-IN')} · spent ${pts.spent.toLocaleString('en-IN')} on rewards</div>
-          ${pts.debt > 0 ? `<div class="pt-debt">You owe ${pts.debt.toLocaleString('en-IN')} points on a loan</div>` : ''}</div>
+          ${pts.debt > 0 ? `<div class="pt-debt">You owe ${pts.debt.toLocaleString('en-IN')} points on a loan</div>` : ''}
+          <button class="btn primary shop-btn" data-action="shop-open">🛍️ Shop${nReady ? ` <span class="shop-n">${nReady} ready</span>` : ''}</button></div>
         <div class="pt-level">
           <div class="lvname"><span class="lbl">Level</span><b>${lv.name}</b></div>
           <div class="bar"><i style="width:${lv.pct}%"></i></div>
@@ -4180,34 +4307,6 @@
         <div class="pt-weeks"><div><span class="lbl">This week</span><b>${sgn(wk(thisWk))}</b></div><div><span class="lbl">Last week</span><b>${sgn(wk(lastWk))}</b></div></div>
       </div>`;
 
-    const tokenNotes = (() => { const n = []; const rdb = restBought(today); if (rdb) n.push(`Rest day: every reward under ${rdb.cost} points is free today (once each)`);
-      redLive().filter((r) => r.special === 'shield' && (r.for || r.date) >= today).forEach((r) => n.push(`Streak shield active for ${(r.for || r.date) === today ? 'today' : fmtShort(r.for || r.date)}`));
-      if (discToken(today)) n.push(`Goal discount ready: ${v.discPct}% off your next goal-gated reward today`);
-      if (waiverToken()) n.push('Loan fee waiver ready: your next loan has no fee');
-      return n.length ? `<div class="pt-pending" style="margin:0 0 12px">${n.map((t) => `<div class="note">${esc(t)}</div>`).join('')}</div>` : ''; })();
-    const rcard = (r) => {
-      const st = rewardState(r, pts), pct = st.free ? 100 : Math.min(100, pts.A / st.price * 100);
-      const rise = r.rise && st.price !== r.cost ? ` <span class="note">(base ${r.cost})</span>` : '';
-      return `<div class="rw-card ${st.ok ? 'ready' : ''}">
-        <div class="rw-top"><b>${esc(r.name)}</b><span class="rw-cost">${st.free ? 'Free' : st.price.toLocaleString('en-IN') + ' pts'}${st.free ? ` <span class="note">(was ${st.base})</span>` : rise}</span></div>
-        <div class="rw-meta">${LIMITS[r.limit || 'none']}${r.special === 'rest' ? ' · protects your streak, no penalties' : r.special === 'pass' ? ' · skips today’s goal and its penalty' : r.special === 'shield' ? ' · a missed day will not break your streak' : r.special === 'disc' ? ` · ${v.discPct}% off your next goal-gated reward today` : r.special === 'waiver' ? ' · your next loan has no fee' : ''}${st.free ? ' · free on your rest day' : ''}${r.needsGoal && !r.special && !st.free && discToken(today) ? ' · discount active' : ''}${r.needsGoal ? ' · after today’s goal' : ''}${r.allowDebt ? ' · open while in debt' : ''}${r.rise ? ` · +${r.rise}% per use` : ''}</div>
-        <div class="bar"><i style="width:${pct}%"></i></div>
-        <div class="rw-act">
-          <button class="btn sm primary" data-action="rw-redeem" data-id="${r.id}" ${st.ok ? '' : 'disabled'}>Redeem</button>
-          <button class="btn sm" data-action="rw-edit" data-id="${r.id}">Edit</button>
-          <button class="btn sm danger" data-action="rw-del" data-id="${r.id}">Delete</button>
-        </div>
-        ${st.ok ? '' : `<div class="rw-why">${esc(st.why)}</div>`}
-      </div>`;
-    };
-    const shop = `
-      <div class="card"><h2>Rewards <button class="btn sm primary" data-action="rw-add">+ New reward</button></h2>
-        ${tokenNotes}
-        ${rewards.length && !rewards.some((r) => NEW_SPECIALS.includes(r.special)) ? '<div class="pt-pending" style="margin:0 0 12px"><div class="note">New special rewards are available: streak shield, goal discount and loan fee waiver. <button class="linkbtn" data-action="rw-add-specials">Add them</button></div></div>' : ''}
-        ${rewards.length ? `<div class="rw-grid">${rewards.map(rcard).join('')}</div>`
-          : `<div class="empty"><b>No rewards yet</b>Add things you would enjoy and set what they cost.
-              <div style="margin-top:12px"><button class="btn sm" data-action="rw-suggest">Add suggested rewards</button></div></div>`}
-      </div>`;
 
     const autoNow = (() => { let on = true; (cfg.autoLog || []).slice().sort((x, y) => (x.d < y.d ? -1 : 1)).forEach((e) => { if (e.d <= today) on = e.on; }); return on; })();
     const loanCard = `
@@ -4223,11 +4322,7 @@
            <div class="loan-act"><button class="btn sm primary" data-action="loan-take">Take a loan</button></div>`}
         <div class="field" style="margin:12px 0 0"><label class="chk"><input type="checkbox" data-change="loan-auto" ${autoNow ? 'checked' : ''}> Auto-repay ${v.loanShare}% of each day's earnings while I owe</label></div>
       </div>`;
-    const history = `
-      <div class="card"><h2>Redeemed <small>latest 10</small></h2>
-        ${hist.length ? hist.map((x) => `<div class="list-row"><div class="grow"><div class="nm">${esc(x.name)}</div><div class="meta">${fmtShort(x.date)}</div></div><b class="neg">${x.free ? 'Free' : '−' + x.cost}</b><button class="btn sm" data-action="rd-undo" data-id="${x.id}">Undo</button></div>`).join('')
-          : '<div class="note">Nothing redeemed yet.</div>'}
-      </div>`;
+
 
     const days = rangeCard(pts);
     const goalsCard = goalsCardHtml(pts);
@@ -4264,9 +4359,10 @@
       <div class="page-head"><div><h1>Rewards</h1><p class="sub">Earn points for studying, spend them on rewards you choose</p></div></div>
       <div class="stack">
         ${header}
+        ${bossCard()}
         ${goalsCard}
         <div class="grid">
-          <div class="stack">${loanCard}${shop}${history}</div>
+          <div class="stack">${loanCard}</div>
           <div class="stack">${chart}${days}${settings}${logCard}</div>
         </div>
       </div>`;
@@ -4568,10 +4664,10 @@
   function render() {
     refreshGoal();
     if (focusLocked() && ui.page !== 'today') { ui.page = 'today'; ui.date = todayStr(); }
-    $$('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === ui.page));
+    $$('.nav').forEach((b) => b.classList.toggle('active', b.dataset.page === (ui.page === 'shop' ? 'rewards' : ui.page)));
     const main = $('#main');
     const keep = main.scrollTop;
-    main.innerHTML = ({ today: pageToday, timetable: pageTimetable, progress: pageProgress, journal: pageJournal, rewards: pageRewards, library: pageLibrary }[ui.page] || pageToday)();
+    main.innerHTML = ({ today: pageToday, timetable: pageTimetable, progress: pageProgress, journal: pageJournal, rewards: pageRewards, shop: pageShop, library: pageLibrary }[ui.page] || pageToday)();
     main.scrollTop = keep;
     if (ui.page === 'timetable' && ui.tt.scrollNow) {
       ui.tt.scrollNow = false;
@@ -4798,6 +4894,11 @@
       if (t) softDelete(t, `Deleted template "${t.name}"`);
     },
     // --- rewards
+    'shop-open': () => { ui.page = 'shop'; render(); $('#main').scrollTop = 0; },
+    'shop-back': () => { ui.page = 'rewards'; render(); $('#main').scrollTop = 0; },
+    'shop-cat': (el) => { ui.shop.cat = el.dataset.v; render(); },
+    'shop-more': () => { ui.shop.more = !ui.shop.more; render(); },
+    'rw-pick': (el) => { const i = $('#rw-icon'); if (i) { i.value = el.dataset.e; rwIconPrev(); } },
     'rw-add': () => rewardModal(null),
     'rw-edit': (el) => { const r = live(data.rewards).find((x) => x.id === el.dataset.id); if (r) rewardModal(r); },
     'rw-del': (el) => { const r = live(data.rewards).find((x) => x.id === el.dataset.id); if (r) { ptLog(`Deleted reward "${r.name}"`); softDelete(r, `Deleted reward "${r.name}"`); } },
@@ -5179,6 +5280,7 @@
     'm-calc': () => updateEnd(),
     'sl-calc': () => updateSleepSum(),
     'b-calc': () => updateBlockDur(),
+    'rw-icon-prev': () => rwIconPrev(),
     'jr-q': (el) => {
       ui.jr.q = el.value;
       const v = journalView(), list = $('#jr-list'), cnt = $('#jr-count');
@@ -5213,6 +5315,7 @@
   };
   // committed-value handlers
   const changes = {
+    'shop-sort': (el) => { ui.shop.sort = el.value; render(); },
     'date-pick': (el) => { if (el.value) { ui.date = el.value; render(); } },
     'f-topic-change': (el) => {
       const hit = live(data.topics).find((x) => x.name.toLowerCase() === el.value.trim().toLowerCase());
