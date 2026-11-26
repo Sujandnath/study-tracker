@@ -1153,3 +1153,12 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
   .bs-panel { width: 104px; height: 104px; border-radius: 16px; } .bs-panel .bs-svg { width: 94px; height: 94px; }
   .bs-info b { font-size: 16px; } .bs-from { display: none; }
 }
+
+/* v78: difficulty chip beside the boss name; the shop button no longer jumps when pressed */
+.bs-nm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bs-info .bs-nm b { display: inline; }
+.bs-tc { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; padding: 3px 9px; border-radius: 99px; background: #eaf1fe; color: var(--blue); }
+.bs-tc.t-n { background: #e8f5ec; color: #166534; }
+.bs-tc.t-b { background: #fee2e2; color: #b91c1c; }
+.shop-btn:active { transform: translateY(calc(-50% + 1px)); }
+@media (max-width: 760px) { .shop-btn:active { transform: translateY(1px); } }

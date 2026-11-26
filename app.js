@@ -2358,8 +2358,9 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 77, APP_DATE = '26 Nov 2026';
+  const APP_VERSION = 78, APP_DATE = '26 Nov 2026';
   const CHANGELOG = [
+    [78, '26 Nov', 'Fix: the Shop button sometimes ignored a click (it jumped when pressed). Weekly boss: once your difficulty locks in (after 1h of study that week) the Normal / Hard / Brutal choices disappear and the difficulty shows as a tag beside the boss name.'],
     [77, '26 Nov', 'Weekly bosses now have faces: 25 hand-drawn, scary-cute bosses (The Lazy Slug, The Doomscroller, The Deadline Dragon...) with a one-line taunt each. A new boss each week (a rematch keeps the same one), spikes at level 4, a crown at level 7 and a blazing aura at level 9. A beaten boss shows bandaged and dizzy.'],
     [76, '26 Nov', 'Weekly boss upgrade: pick Normal, Hard or Brutal each week, boss levels (win to level up, lose to drop one; up to +40% on your 2-week average), loot drops on a win (bonus points, goal discount, loan fee waiver, streak shield or rest day, kept in the Shop), a rematch with x1.5 points after a loss, and a pace marker on the health bar. The boss card is no longer on the Today page.'],
     [75, '26 Nov', 'Shop: rewards now live on their own Shop page (button on the points card) with an icon on every reward, ready-to-buy tags, filters and a short Redeemed history. Pick an icon when you add or edit a reward; if you do not, one is chosen from its name.'],
@@ -3781,9 +3782,8 @@
     const lootLine = b.win ? `<div class="bs-loot ${loot.rarity}"><span>${lname[1]}</span><div><b>${loot.rarity.toUpperCase()} loot: ${loot.kind === 'pts' ? '+' + loot.amount + ' bonus points' : lname[0]}</b>${loot.kind === 'pts' ? '' : '<small>Waiting in your Shop</small>'}</div></div>` : '';
     return `<div class="card boss ${b.win ? 'won' : ''}">
       <h2>⚔️ Weekly boss <small>Level ${info.level} · +${info.reward}</small></h2>
-      ${(() => { const a = bossArt(info.look.idx, info.level, b.win); return `<div class="bs-name ${b.win ? 'bs-dead' : ''}"><div class="bs-panel" style="background:${a.bg}">${a.svg}</div><div class="bs-info"><b>${esc(a.name)}</b>${info.rematch ? '<span class="bs-rm">REMATCH ×1.5</span>' : ''}<div class="bs-taunt">“${esc(a.flavour)}”</div><div class="note">${BOSS_TIERS[info.tier][0]} · ${info.hist ? `+${Math.round(info.up * 100)}% on your 2-week average` : 'starting target (no recent weeks to average yet)'}</div></div></div>`; })()}
-      <div class="bs-tiers" title="${locked ? 'Locked once you have studied an hour this week' : 'Pick this week\'s difficulty'}">${tiers}</div>
-      ${locked ? '' : '<div class="note" style="margin:-4px 0 10px">Pick your difficulty. It locks once you study an hour this week.</div>'}
+      ${(() => { const a = bossArt(info.look.idx, info.level, b.win); return `<div class="bs-name ${b.win ? 'bs-dead' : ''}"><div class="bs-panel" style="background:${a.bg}">${a.svg}</div><div class="bs-info"><div class="bs-nm"><b>${esc(a.name)}</b>${locked ? `<span class="bs-tc t-${info.tier}">${BOSS_TIERS[info.tier][0]}</span>` : ''}</div>${info.rematch ? '<span class="bs-rm">REMATCH ×1.5</span>' : ''}<div class="bs-taunt">“${esc(a.flavour)}”</div><div class="note">${BOSS_TIERS[info.tier][0]} · ${info.hist ? `+${Math.round(info.up * 100)}% on your 2-week average` : 'starting target (no recent weeks to average yet)'}</div></div></div>`; })()}
+      ${locked ? '' : `<div class="bs-tiers" title="Pick this week's difficulty">${tiers}</div><div class="note" style="margin:-4px 0 10px">Pick your difficulty. It locks in once you study an hour this week.</div>`}
       <div class="bs-hp" title="Boss health"><i style="width:${hp}%"></i><u style="left:${Math.max(0, Math.min(100, 100 - paceFrac * 100))}%" title="Where you should be today"></u><span>${b.win ? 'Defeated' : Math.round(hp) + '% health left'}</span></div>
       ${b.win ? '' : `<div class="note bs-pace">${ahead >= 0 ? `Ahead of pace by <b>${short(Math.round(ahead))}</b>` : `Behind pace by <b>${short(Math.round(-ahead))}</b>`} · the line shows where you should be today</div>`}
       ${row(b.hOk, `Study <b>${short(b.hrs)}</b> of <b>${short(info.target)}</b>`)}
