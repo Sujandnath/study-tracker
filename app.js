@@ -1579,7 +1579,6 @@
         <div class="stack">
           <div class="card ${focusLocked() ? 'timer-live' : ''}">${timerCard()}</div>
           ${upNextCard()}
-          ${isToday ? bossCard() : ''}
           ${dayTimelineCard(d)}
         </div>
         <div class="stack">
@@ -2359,8 +2358,10 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 75, APP_DATE = '26 Nov 2026';
+  const APP_VERSION = 77, APP_DATE = '26 Nov 2026';
   const CHANGELOG = [
+    [77, '26 Nov', 'Weekly bosses now have faces: 25 hand-drawn, scary-cute bosses (The Lazy Slug, The Doomscroller, The Deadline Dragon...) with a one-line taunt each. A new boss each week (a rematch keeps the same one), spikes at level 4, a crown at level 7 and a blazing aura at level 9. A beaten boss shows bandaged and dizzy.'],
+    [76, '26 Nov', 'Weekly boss upgrade: pick Normal, Hard or Brutal each week, boss levels (win to level up, lose to drop one; up to +40% on your 2-week average), loot drops on a win (bonus points, goal discount, loan fee waiver, streak shield or rest day, kept in the Shop), a rematch with x1.5 points after a loss, and a pace marker on the health bar. The boss card is no longer on the Today page.'],
     [75, '26 Nov', 'Shop: rewards now live on their own Shop page (button on the points card) with an icon on every reward, ready-to-buy tags, filters and a short Redeemed history. Pick an icon when you add or edit a reward; if you do not, one is chosen from its name.'],
     [74, '26 Nov', 'Weekly boss: each Monday a new boss appears. Beat it by Sunday (study hours = your last 2 weeks\' average +15%, study on 5 days, and every subject gets its share) for +300. It replaces the flat weekly target. Removed the points for focused sessions and deep work (focus ratings are just ratings now).'],
     [73, '26 Nov', 'Journal PIN lock: set a 4-digit PIN to lock the Journal entries (also hidden on Today and the weekly review). It relocks when you leave the app for 2 minutes. Forgot PIN: the lock can be removed after 24 hours.'],
@@ -2412,6 +2413,12 @@
         `Study pays <b>${v.study30} points per 30 minutes</b> (per minute). Reaching your daily goal (${short(st.dailyGoalMin * 60)}) earns <b>+${v.goal}</b>.`,
         ...(st.goalPlan || []).filter((e) => e.from).sort((a, b) => (a.from < b.from ? -1 : 1)).map((e) => `From <b>${fmtLong(e.from)}</b> your goal is <b>${short(e.min * 60)}</b>${e.boost ? ` and study points and the goal bonus get <b>+${e.boost}%</b> on those days` : ''}. Earlier days keep their own goal.`),
         `A rest day or a streak shield does not break your streak.`])}
+      ${sec('Weekly boss', [
+        `Every Monday a boss appears. Beat it by Sunday: study your target hours, study <b>1h+ on 5 days</b>, and give <b>every subject</b> a share (10% of the target, at least 1h).`,
+        `The target is your <b>last 2 weeks' average</b> plus 10% + 5% per boss level (max +40%). Pick <b>Normal</b> (one level lower), <b>Hard</b> or <b>Brutal</b> (one higher) before you study an hour that week.`,
+        `Reward: <b>+${v.boss}</b> at level 1, <b>+${BOSS_STEP}</b> more for each level above. Hard wins raise your level by 1, Brutal by 2, Normal keeps it. A loss drops it by 1 (never below 1).`,
+        `After a loss the same boss comes back as a <b>rematch</b> worth <b>×1.5</b> points.`,
+        `A win drops <b>loot</b>: bonus points, a goal discount, a loan fee waiver, a streak shield or a rest day. Better odds at higher levels, and a rare or better at least every 4th win. Loot waits in the Shop until you use it.`])}
       ${sec('Timetable blocks', [
         `A block counts as done when you study <b>90%</b> of its planned length, or when you mark it complete.`,
         `A block pays <b>${v.blockM} points per hour</b> of its length: 30 minutes pays half, 2 hours pays double, and the most one block pays is <b>${v.blockM * 3}</b> (3 hours). This applies from ${cfg.blockFrom ? fmtLong(cfg.blockFrom) : 'today'}; earlier days paid a flat ${v.blockM}.`,
@@ -3558,7 +3565,7 @@
     ['wakeSteady', 'Steady wake time (within the window of your usual week)'], ['wakeWin', 'Steady wake window (minutes)'],
     ['revise', 'Revision: study a topic last covered 3+ days ago (10+ min)'], 
     ['weak', 'Weak subject: time on your least-studied subject this week'], ['weakMin', 'Weak subject minutes needed'],
-    ['noMiss', 'No-miss day: every planned study block done (2+ blocks)'], ['boss', 'Weekly boss defeated (hours = last 2 weeks average +15%, 5 study days, every subject)'], ['weekGoalH', 'Weekly boss starting target when there is no history (hours)'],
+    ['noMiss', 'No-miss day: every planned study block done (2+ blocks)'], ['boss', 'Weekly boss reward at level 1 (+50 for each level above 1)'], ['weekGoalH', 'Weekly boss starting target when there is no history (hours)'],
     ['perfectWeek', 'Perfect week: daily goal met on every non-rest day'], ['improve', 'Improvement: week beats last week by 10%+'],
     ['comeback', 'Comeback: study after a day with none'], ['comebackMin', 'Comeback minutes needed'],
     ['streak14', '14-day streak'], ['mile50', 'Milestone: 50 hours of study in total'], ['mile100', 'Milestone: 100 hours of study in total'], ['mile250', 'Milestone: 250 hours of study in total'],
@@ -3596,10 +3603,108 @@
 
   // =====================================================================
   //  WEEKLY BOSS: one hard goal per Monday-to-Sunday week
-  //  Hours = average of the last 2 weeks +15%, 5 days with 1h+, every subject gets its share.
+  //  Hours = your last 2 weeks' average + a bonus that grows with the boss level (10% + 5% per level, max 40%),
+  //  5 days with 1h+, and every subject gets its share. Win = level up, loss = level down. Wins drop loot.
   // =====================================================================
-  const BOSS_UP = 1.15, BOSS_DAYS = 5, BOSS_DAYSEC = 3600;
-  const BOSS_NAMES = ['The Iron Golem', 'The Hydra', 'The Minotaur', 'The Stone Titan', 'The Frost Giant', 'The Shadow Wyrm', 'The Cyclops', 'The Basilisk', 'The Kraken', 'The Phoenix', 'The Sphinx', 'The Chimera'];
+  const BOSS_DAYS = 5, BOSS_DAYSEC = 3600, BOSS_STEP = 50, BOSS_LVMAX = 10;
+  const BOSS_TIERS = { n: ['Normal', -1], h: ['Hard', 0], b: ['Brutal', 1] };
+  const BOSS_LOOT = { disc: ['Goal discount', '🏷️'], waiver: ['Loan fee waiver', '🧾'], shield: ['Streak shield', '🛡️'], rest: ['Rest day', '🛌'], pts: ['Bonus points', '✨'] };
+  const bossUp = (e) => Math.min(0.40, 0.10 + 0.05 * e);
+  // scarier procedural boss portraits (original shapes, drawn in code)
+  const BOSS_PAL = {
+    ember:['#ea580c','#7c2d12','#fdba74','#fde047'], venom:['#65a30d','#1a2e05','#bef264','#a3e635'], shadow:['#7c3aed','#2e1065','#c4b5fd','#f472b6'],
+    storm:['#475569','#0f172a','#cbd5e1','#38bdf8'], rust:['#b45309','#451a03','#fcd34d','#ef4444'], bone:['#d6d3d1','#44403c','#fafaf9','#ef4444'],
+    frost:['#0ea5e9','#082f49','#bae6fd','#e0f2fe'], moss:['#16a34a','#052e16','#86efac','#fde047'], blood:['#dc2626','#450a0a','#fecaca','#fde047'], ghost:['#14b8a6','#042f2e','#99f6e4','#f0abfc']
+  };
+  // 25 hand-picked recipes: name, flavour line, look
+  const BOSS_ROSTER = [
+   ['The Lazy Slug','Never in a hurry. Never leaves.','blob','venom','sleepy','none','maw','drool'],
+   ['The Doomscroller','Eyes glued to a screen only it can see.','tall','shadow','four','none','jag','none'],
+   ['The Snooze Button','Hits back every time you hit it.','orb','rust','sleepy','two','yawn','none'],
+   ['Procrastinator Prime','Will fight you tomorrow.','golem','storm','angry','three','smirk','cracks'],
+   ['The Midnight Snacker','Eats your focus at 2 a.m.','brute','blood','angry','none','maw','arms'],
+   ['The Distraction Demon','Ooh, what is that over there?','spike','shadow','three','ram','jag','none'],
+   ['The Rabbit-Hole Wyrm','Starts as one tab. Ends as forty.','orb','ghost','one','none','jag','tentacles'],
+   ['The Binge Leech','Just one more episode.','blob','moss','angry','two','maw','drool'],
+   ['Sir Yawn-a-Lot','Its yawn is contagious.','tall','frost','sleepy','antlers','yawn','arms'],
+   ['The Cram Crusher','Remembers nothing from last night.','golem','rust','angry','two','jag','cracks'],
+   ['The Mock-Test Minotaur','Scores you before you finish.','brute','bone','angry','two','smirk','arms'],
+   ['The Backlog Beast','Grows by one chapter every day.','spike','ember','angry','three','maw','arms'],
+   ['The Deadline Dragon','Always one day closer.','spike','blood','angry','two','jag','wings'],
+   ['The Phone Phantom','Buzzes, then vanishes.','orb','ghost','four','none','smirk','tentacles'],
+   ['The Coffee Crash','Wired at 4 p.m., dead at 5.','brute','rust','angry','none','jag','scar'],
+   ['The Tab Hoarder','Seven tabs open. Zero read.','golem','storm','four','none','jag','none'],
+   ['The Mood-Swing Mimic','Copies how you feel today.','blob','shadow','two','none','maw','cracks'],
+   ['The Weekend Warlock','Casts "I will study on Sunday".','tall','shadow','angry','antlers','smirk','arms'],
+   ['The Gloom Goblin','Whispers that it is too late to start.','spike','moss','angry','two','jag','none'],
+   ['The Brain Fog','Rolls in right after lunch.','orb','storm','one','none','yawn','tentacles'],
+   ['The Excuse Engine','Has a reason for everything.','golem','ember','angry','three','smirk','cracks'],
+   ['The Perfectionist Pest','Restarts your notes. Again.','orb','bone','three','none','smirk','scar'],
+   ['The Group-Chat Gremlin','47 unread. All memes.','brute','ghost','angry','two','maw','wings'],
+   ['The Sunday Scaries','Shows up the night before.','tall','frost','angry','ram','jag','tentacles'],
+   ['The Final-Hour Fiend','Wakes at the very last minute.','spike','blood','one','three','maw','wings'],
+  ];
+  function bossArt(i, level, dead){
+    const [name, flavour, body, pal, eyes, horns, mouth, extra] = BOSS_ROSTER[i];
+    const [c1, c2, c3, glow] = BOSS_PAL[pal], id = 'bg' + i + '_' + level + (dead ? 'd' : ''), ink = '#0a0f1e';
+    let s = `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient><radialGradient id="${id}e"><stop offset="0" stop-color="#fff"/><stop offset=".35" stop-color="${glow}"/><stop offset="1" stop-color="${glow}" stop-opacity="0"/></radialGradient><radialGradient id="${id}a"><stop offset="0" stop-color="${glow}" stop-opacity=".45"/><stop offset="1" stop-color="${glow}" stop-opacity="0"/></radialGradient></defs>`;
+    s += `<circle cx="60" cy="64" r="${level >= 9 ? 62 : 50}" fill="url(#${id}a)"/>`;
+    const fill = `url(#${id})`, st = `stroke="${ink}" stroke-width="3" stroke-linejoin="round"`;
+    // back extras
+    if (body === 'spike' || level >= 4) { for (let k = 0; k < 7; k++) { const x = 22 + k * 12, y = k % 2 ? 16 : 6; s += `<polygon points="${x - 7},46 ${x},${y} ${x + 7},46" fill="${c2}" ${st}/>`; } }
+    if (extra === 'wings') s += `<path d="M24 66 L0 30 L12 44 L8 24 L30 48Z M96 66 L120 30 L108 44 L112 24 L90 48Z" fill="${c2}" ${st}/>`;
+    if (extra === 'tentacles') s += `<path d="M30 98 q-14 6 -6 20 M46 104 q-6 12 4 14 M74 104 q6 12 -4 14 M90 98 q14 6 6 20" stroke="${c2}" stroke-width="9" stroke-linecap="round" fill="none"/>`;
+    // horns
+    const bone = '#e7e0cc', hn = (x, d, l) => `<path d="M${x} 44 Q${x + d * 10} ${44 - l} ${x + d * 22} ${36 - l * 0.7}" stroke="${ink}" stroke-width="13" stroke-linecap="round" fill="none"/><path d="M${x} 44 Q${x + d * 10} ${44 - l} ${x + d * 22} ${36 - l * 0.7}" stroke="${bone}" stroke-width="8" stroke-linecap="round" fill="none"/>`;
+    if (horns === 'two') s += hn(38, -1, 26) + hn(82, 1, 26);
+    if (horns === 'three') s += hn(34, -1, 22) + hn(86, 1, 22) + `<polygon points="52,40 60,6 68,40" fill="${bone}" ${st}/>`;
+    if (horns === 'ram') s += `<path d="M34 44 q-22 -4 -18 18 q8 10 16 -2" fill="none" stroke="${ink}" stroke-width="13" stroke-linecap="round"/><path d="M34 44 q-22 -4 -18 18 q8 10 16 -2" fill="none" stroke="${bone}" stroke-width="8" stroke-linecap="round"/><path d="M86 44 q22 -4 18 18 q-8 10 -16 -2" fill="none" stroke="${ink}" stroke-width="13" stroke-linecap="round"/><path d="M86 44 q22 -4 18 18 q-8 10 -16 -2" fill="none" stroke="${bone}" stroke-width="8" stroke-linecap="round"/>`;
+    if (horns === 'antlers') s += `<path d="M44 42 L34 12 M39 26 L24 22 M76 42 L86 12 M81 26 L96 22 M36 18 L40 4 M84 18 L80 4" stroke="${ink}" stroke-width="10" stroke-linecap="round"/><path d="M44 42 L34 12 M39 26 L24 22 M76 42 L86 12 M81 26 L96 22 M36 18 L40 4 M84 18 L80 4" stroke="${bone}" stroke-width="5" stroke-linecap="round"/>`;
+    // body
+    if (body === 'blob') s += `<ellipse cx="60" cy="74" rx="42" ry="34" fill="${fill}" ${st}/>`;
+    if (body === 'tall') s += `<rect x="28" y="30" width="64" height="82" rx="30" fill="${fill}" ${st}/>`;
+    if (body === 'orb') s += `<circle cx="60" cy="68" r="43" fill="${fill}" ${st}/>`;
+    if (body === 'golem') s += `<rect x="24" y="32" width="72" height="76" rx="12" fill="${fill}" ${st}/><path d="M24 62 H96 M24 88 H96 M50 32 V62 M72 62 V88" stroke="${ink}" stroke-width="3" opacity=".55"/>`;
+    if (body === 'brute') s += `<path d="M22 50 Q60 14 98 50 L104 104 Q60 118 16 104Z" fill="${fill}" ${st}/>`;
+    if (body === 'spike') s += `<ellipse cx="60" cy="74" rx="40" ry="33" fill="${fill}" ${st}/>`;
+    s += `<ellipse cx="42" cy="54" rx="13" ry="6" fill="#fff" opacity=".18" transform="rotate(-20 42 54)"/>`;
+    if (extra === 'cracks') s += `<path d="M70 38 L64 54 L72 60 L66 76 M30 70 L40 78 L36 92" stroke="${ink}" stroke-width="3" fill="none" stroke-linecap="round" opacity=".75"/>`;
+    if (extra === 'arms') s += `<g ${st} fill="${c1}"><ellipse cx="18" cy="86" rx="10" ry="15"/><ellipse cx="102" cy="86" rx="10" ry="15"/></g><path d="M10 98 l-3 8 M18 100 l0 9 M26 98 l3 8 M94 98 l-3 8 M102 100 l0 9 M110 98 l3 8" stroke="${bone}" stroke-width="3.5" stroke-linecap="round"/>`;
+    // eyes
+    const eyeA = (x, y, r, lid) => `<circle cx="${x}" cy="${y}" r="${r * 2.1}" fill="url(#${id}e)" opacity=".5"/><ellipse cx="${x}" cy="${y}" rx="${r}" ry="${r}" fill="${glow}" ${st}/><ellipse cx="${x}" cy="${y}" rx="${Math.max(1.6, r * 0.2)}" ry="${r * 0.82}" fill="${ink}"/>${lid ? `<path d="M${x - r - 2} ${y - r - 1} H${x + r + 2} V${y + 1} H${x - r - 2}Z" fill="${c1}" ${st}/><path d="M${x - r - 1} ${y + 1} H${x + r + 1}" stroke="${ink}" stroke-width="3"/>` : ''}`;
+    const eye = dead ? (x, y, r) => `<path d="M${x - r * 0.8} ${y - r * 0.8} L${x + r * 0.8} ${y + r * 0.8} M${x + r * 0.8} ${y - r * 0.8} L${x - r * 0.8} ${y + r * 0.8}" stroke="${ink}" stroke-width="4.5" stroke-linecap="round"/>` : eyeA;
+    const brow = dead ? () => '' : (x1, y1, x2, y2) => `<path d="M${x1} ${y1} L${x2} ${y2}" stroke="${ink}" stroke-width="6" stroke-linecap="round"/>`;
+    const sl = eyes === 'sleepy';
+    if (eyes === 'one') s += eye(60, 62, 15) + brow(40, 40, 78, 54);
+    if (eyes === 'two' || eyes === 'angry' || sl) { s += eye(44, 62, 10, sl) + eye(76, 62, 10, sl); if (!sl) s += brow(30, 46, 54, 56) + brow(90, 46, 66, 56); }
+    if (eyes === 'three') s += eye(40, 66, 8) + eye(80, 66, 8) + eye(60, 48, 9) + brow(28, 54, 50, 62) + brow(92, 54, 70, 62);
+    if (eyes === 'four') s += eye(42, 54, 7) + eye(78, 54, 7) + eye(48, 72, 6) + eye(72, 72, 6) + brow(30, 42, 52, 48) + brow(90, 42, 68, 48);
+    if (extra === 'scar') s += `<path d="M34 42 L62 84" stroke="${ink}" stroke-width="5" stroke-linecap="round"/><path d="M34 42 L62 84" stroke="#fecaca" stroke-width="2" stroke-dasharray="4 4"/>`;
+    // mouth
+    const my = eyes === 'four' ? 88 : 86, teethTop = (x0, x1, y, n, h) => { let t = ''; const w = (x1 - x0) / n; for (let k = 0; k < n; k++) t += `<polygon points="${x0 + k * w},${y} ${x0 + k * w + w / 2},${y + h} ${x0 + (k + 1) * w},${y}" fill="#f8fafc"/>`; return t; };
+    if (dead) { /* no teeth when beaten */ } else if (mouth === 'jag') s += `<path d="M34 ${my - 4} Q60 ${my + 18} 86 ${my - 4} Q60 ${my + 2} 34 ${my - 4}Z" fill="${ink}" ${st}/>` + teethTop(38, 82, my - 2, 7, 8);
+    if (dead) { } else if (mouth === 'maw') s += `<path d="M30 ${my - 6} Q60 ${my + 30} 90 ${my - 6} Q60 ${my - 12} 30 ${my - 6}Z" fill="${ink}" ${st}/><ellipse cx="60" cy="${my + 10}" rx="12" ry="6" fill="#be123c"/>` + teethTop(34, 86, my - 6, 8, 10) + `<g transform="translate(0 ${my * 2 + 6}) scale(1 -1)">${teethTop(42, 78, 0, 5, 7)}</g>`;
+    if (dead) { } else if (mouth === 'smirk') s += `<path d="M38 ${my} Q60 ${my + 12} 84 ${my - 6}" stroke="${ink}" stroke-width="5" stroke-linecap="round" fill="none"/><polygon points="52,${my + 4} 56,${my + 14} 60,${my + 6}" fill="#f8fafc"/><polygon points="68,${my + 3} 72,${my + 12} 76,${my + 1}" fill="#f8fafc"/>`;
+    if (dead) { } else if (mouth === 'yawn') s += `<ellipse cx="60" cy="${my + 4}" rx="17" ry="14" fill="${ink}" ${st}/><ellipse cx="60" cy="${my + 10}" rx="9" ry="5" fill="#be123c"/>` + teethTop(46, 74, my - 8, 4, 8);
+    if (extra === 'drool' && !dead) s += `<path d="M44 ${my + 6} q-2 14 2 18 M74 ${my + 4} q2 10 -1 14" stroke="${glow}" stroke-width="4" stroke-linecap="round" fill="none" opacity=".9"/>`;
+    if (dead) s += `<path d="M42 ${my} q6 -6 12 0 t12 0 t12 0" stroke="${ink}" stroke-width="4" fill="none" stroke-linecap="round"/><ellipse cx="72" cy="${my + 9}" rx="7" ry="5" fill="#fb7185"/><g transform="rotate(-18 60 46)"><rect x="38" y="38" width="44" height="13" rx="3" fill="#f5e6c8" stroke="${ink}" stroke-width="2.5"/><path d="M52 38 v13 M68 38 v13" stroke="#d6bc8c" stroke-width="2"/></g><path d="M20 20 l3 6 l6 1 l-5 4 l1 6 l-5 -3 l-5 3 l1 -6 l-5 -4 l6 -1Z M96 14 l2.5 5 l5 1 l-4 3 l1 5 l-4.5 -2.5 l-4.5 2.5 l1 -5 l-4 -3 l5 -1Z" fill="#fde047"/>`;
+    if (level >= 7) s += `<path d="M36 36 L42 18 L51 30 L60 10 L69 30 L78 18 L84 36 Z" fill="#facc15" stroke="${ink}" stroke-width="3" stroke-linejoin="round"/>`;
+    return { dead, svg: `<svg class="bs-svg" viewBox="-4 -2 128 124" xmlns="http://www.w3.org/2000/svg">${s}</svg>`, name, flavour, bg: `radial-gradient(circle at 50% 40%, ${c2}, #0b1020 78%)` };
+  }
+
+  function bossPick(ws, prevIdx) { const r = seedRand('look' + ws); let i = Math.floor(r() * BOSS_ROSTER.length); if (i === prevIdx) i = (i + 1) % BOSS_ROSTER.length; return i; }
+  function seedRand(str) {
+    let h = 1779033703 ^ str.length;
+    for (let i = 0; i < str.length; i++) { h = Math.imul(h ^ str.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
+    return () => { h = Math.imul(h ^ (h >>> 16), 2246822507); h = Math.imul(h ^ (h >>> 13), 3266489909); h ^= h >>> 16; return (h >>> 0) / 4294967296; };
+  }
+  function bossRoll(ws, eff, dry) {
+    const r = seedRand('boss' + ws), x = r(), y = r(), epicP = Math.min(0.30, 0.08 + 0.02 * eff), rareP = Math.min(0.45, 0.30 + 0.02 * eff);
+    let rarity = x < epicP ? 'epic' : x < epicP + rareP ? 'rare' : 'common';
+    if (rarity === 'common' && dry >= 3) rarity = 'rare'; // pity: a rare or better at least every 4th win
+    const kind = rarity === 'epic' ? (y < 0.5 ? 'shield' : 'rest') : rarity === 'rare' ? (y < 0.5 ? 'disc' : 'waiver') : 'pts';
+    return { rarity, kind, amount: 50 };
+  }
   function bossCtx() {
     const tm = data.timer, td = todayStr(), tmap = new Map(live(data.topics).map((t) => [t.name.toLowerCase(), t]));
     const subs = live(data.subjects).filter((s) => !s.noWeekly && live(data.topics).some((t) => t.subjectId === s.id));
@@ -3607,48 +3712,105 @@
     live(data.sessions).forEach((s) => { if (kindOf(s.type) !== 'study') return; (byDay[s.date] = byDay[s.date] || []).push(s); if (s.date < first) first = s.date; });
     const tmStudy = !!(tm && kindOf(tm.type) === 'study'), tmSec = tmStudy ? Math.round(elapsedMs(tm) / 1000) : 0;
     const sOf = (x) => (byDay[x] || []).reduce((n, s) => n + s.seconds, 0) + (x === td ? tmSec : 0);
-    return { tm, td, tmap, subs, byDay, first, tmStudy, tmSec, sOf, tgt: {} };
+    const start = (data.pointsCfg && data.pointsCfg.startDate) || td;
+    return { tm, td, tmap, subs, byDay, first, tmStudy, tmSec, sOf, start, weeks: null, base: {} };
   }
-  function bossTarget(c, ws) {
-    if (c.tgt[ws] !== undefined) return c.tgt[ws];
+  // average of the last 2 weeks that happened after you started studying
+  function bossBase(c, ws) {
+    if (c.base[ws]) return c.base[ws];
     const weeks = [];
     for (let k = 1; k <= 2; k++) {
       const w0 = addDays(ws, -7 * k); if (addDays(w0, 6) < c.first) continue;
       let t = 0; for (let i = 0; i < 7; i++) t += c.sOf(addDays(w0, i)); weeks.push(t);
     }
     const avg = weeks.length ? weeks.reduce((n, x) => n + x, 0) / weeks.length : 0;
-    return (c.tgt[ws] = avg > 0 ? Math.max(5 * 3600, Math.round(avg * BOSS_UP / 1800) * 1800) : (ptv().weekGoalH || 20) * 3600);
+    return (c.base[ws] = avg > 0 ? { base: avg, hist: true } : { base: (ptv().weekGoalH || 20) * 3600, hist: false });
   }
-  // progress of the week starting ws, counting days ws..d
-  function bossAt(c, ws, d) {
-    const end = d < addDays(ws, 6) ? d : addDays(ws, 6), target = bossTarget(c, ws);
-    const need = Math.max(3600, Math.round(target * 0.10 / 900) * 900), ss = new Map(c.subs.map((x) => [x.id, 0]));
+  function bossSet(c, ws, level, tier, rematch) {
+    const v = ptv(), eff = Math.max(0, Math.min(BOSS_LVMAX, level + BOSS_TIERS[tier][1])), b = bossBase(c, ws), up = bossUp(eff);
+    const target = b.hist ? Math.max(5 * 3600, Math.round(b.base * (1 + up) / 1800) * 1800) : Math.round(b.base * (1 + (eff - 1) * 0.05) / 1800) * 1800;
+    let reward = v.boss + BOSS_STEP * (eff - 1); if (rematch) reward = Math.round(reward * 1.5);
+    return { tier, eff, up, target, need: Math.max(3600, Math.round(target * 0.10 / 900) * 900), reward: Math.max(0, reward), hist: b.hist };
+  }
+  const bossTierOf = (ws) => { const t = data.settings.boss && data.settings.boss.tiers && data.settings.boss.tiers[ws]; return BOSS_TIERS[t] ? t : 'h'; };
+  // walks every week since you started: level, target, result, loot
+  function bossBuild(c) {
+    c.weeks = {}; const cur = weekStart(c.td);
+    let L = 1, dry = 0, prev = null;
+    for (let ws = weekStart(c.start); ws <= cur; ws = addDays(ws, 7)) {
+      const rematch = !!(prev && prev.done && !prev.win), tier = bossTierOf(ws), set = bossSet(c, ws, L, tier, rematch);
+      const look = rematch ? prev.look : { idx: bossPick(ws, prev ? prev.look.idx : -1) };
+      const info = { ws, level: L, rematch, look, ...set, dry, done: addDays(ws, 6) < c.td, win: false, loot: bossRoll(ws, set.eff, dry) };
+      const end = info.done ? addDays(ws, 6) : c.td, res = bossAt(c, info, end);
+      info.win = res.win;
+      if (info.done) {
+        if (info.win) { L = Math.min(BOSS_LVMAX, L + (tier === 'b' ? 2 : tier === 'h' ? 1 : 0)); dry = info.loot.rarity === 'common' ? dry + 1 : 0; } else L = Math.max(1, L - 1);
+      }
+      c.weeks[ws] = info; prev = info;
+    }
+  }
+  const bossInfo = (c, ws) => { if (!c.weeks) bossBuild(c); return c.weeks[ws]; };
+  // progress of week `info` counting days ws..d
+  function bossAt(c, info, d) {
+    const ws = info.ws, end = d < addDays(ws, 6) ? d : addDays(ws, 6), ss = new Map(c.subs.map((x) => [x.id, 0]));
     let hrs = 0, days = 0;
     for (let x = ws; x <= end; x = addDays(x, 1)) {
       const s = c.sOf(x); hrs += s; if (s >= BOSS_DAYSEC) days++;
       (c.byDay[x] || []).forEach((se) => weeklySubjectIds(se, c.tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + se.seconds); }));
       if (x === c.td && c.tmStudy) weeklySubjectIds(c.tm, c.tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + c.tmSec); });
     }
-    const hOk = hrs >= target, dOk = days >= BOSS_DAYS, sOk = c.subs.every((x) => ss.get(x.id) >= need);
-    return { ws, target, hrs, days, ss, need, hOk, dOk, sOk, win: hOk && dOk && sOk };
+    const hOk = hrs >= info.target, dOk = days >= BOSS_DAYS, sOk = c.subs.every((x) => ss.get(x.id) >= info.need);
+    return { hrs, days, ss, hOk, dOk, sOk, win: hOk && dOk && sOk };
+  }
+  // loot from won weeks that has not been used yet (bonus points are paid automatically, so they are not here)
+  function bossTray(c) {
+    if (!c.weeks) bossBuild(c);
+    const used = new Set(live(data.redemptions).filter((r) => r.lootWs).map((r) => r.lootWs));
+    return Object.values(c.weeks).filter((w) => w.win && w.loot.kind !== 'pts' && !used.has(w.ws)).map((w) => ({ ws: w.ws, kind: w.loot.kind, rarity: w.loot.rarity, name: BOSS_LOOT[w.loot.kind][0], icon: BOSS_LOOT[w.loot.kind][1], look: { idx: w.look.idx, name: BOSS_ROSTER[w.look.idx][0] }, level: w.level }));
   }
   function bossCard() {
     const v = ptv(); if (!(v.boss > 0)) return '';
-    const c = bossCtx(), td = c.td, ws = weekStart(td), b = bossAt(c, ws, td), lastWs = addDays(ws, -7), lb = bossAt(c, lastWs, addDays(lastWs, 6));
-    const name = BOSS_NAMES[Math.floor(parseYmd(ws).getTime() / 604800000) % BOSS_NAMES.length];
-    const left = daysBetween(td, addDays(ws, 6)), hp = Math.max(0, 100 - b.hrs / b.target * 100), perDay = left > 0 ? Math.max(0, b.target - b.hrs) / left : 0;
+    const c = bossCtx(), td = c.td, ws = weekStart(td), info = bossInfo(c, ws); if (!info) return '';
+    const b = bossAt(c, info, td), lastWs = addDays(ws, -7), li = c.weeks[lastWs];
+    const left = daysBetween(td, addDays(ws, 6)), idx = 7 - left, hp = Math.max(0, 100 - b.hrs / info.target * 100), perDay = left > 0 ? Math.max(0, info.target - b.hrs) / left : 0;
+    const paceFrac = (idx + 1) / 7, ahead = b.hrs - info.target * paceFrac, locked = b.hrs >= 3600;
     const row = (ok, text) => `<div class="bs-row ${ok ? 'ok' : ''}"><span>${ok ? '✓' : '○'}</span>${text}</div>`;
-    const hadLast = addDays(lastWs, 6) >= c.first;
-    const status = b.win ? `<div class="bs-win">Defeated! +${v.boss} points</div>` : `<div class="note">${left} ${left === 1 ? 'day' : 'days'} left${!b.hOk ? ` · about <b>${short(Math.round(perDay))}</b> a day to finish the hours` : ''}</div>`;
+    const tiers = Object.entries(BOSS_TIERS).map(([k, [lab]]) => { const x = bossSet(c, ws, info.level, k, info.rematch);
+      return `<button class="bs-tier ${info.tier === k ? 'on' : ''}" ${locked ? 'disabled' : ''} data-action="boss-tier" data-t="${k}"><b>${lab}</b><span>${short(x.target)}</span><em>+${x.reward}</em></button>`; }).join('');
+    const loot = info.loot, lname = BOSS_LOOT[loot.kind];
+    const lootLine = b.win ? `<div class="bs-loot ${loot.rarity}"><span>${lname[1]}</span><div><b>${loot.rarity.toUpperCase()} loot: ${loot.kind === 'pts' ? '+' + loot.amount + ' bonus points' : lname[0]}</b>${loot.kind === 'pts' ? '' : '<small>Waiting in your Shop</small>'}</div></div>` : '';
     return `<div class="card boss ${b.win ? 'won' : ''}">
-      <h2>⚔️ Weekly boss <small>${name} · +${v.boss}</small></h2>
-      <div class="bs-hp" title="Boss health"><i style="width:${hp}%"></i><span>${b.win ? 'Defeated' : Math.round(hp) + '% health left'}</span></div>
-      ${row(b.hOk, `Study <b>${short(b.hrs)}</b> of <b>${short(b.target)}</b>`)}
+      <h2>⚔️ Weekly boss <small>Level ${info.level} · +${info.reward}</small></h2>
+      ${(() => { const a = bossArt(info.look.idx, info.level, b.win); return `<div class="bs-name ${b.win ? 'bs-dead' : ''}"><div class="bs-panel" style="background:${a.bg}">${a.svg}</div><div class="bs-info"><b>${esc(a.name)}</b>${info.rematch ? '<span class="bs-rm">REMATCH ×1.5</span>' : ''}<div class="bs-taunt">“${esc(a.flavour)}”</div><div class="note">${BOSS_TIERS[info.tier][0]} · ${info.hist ? `+${Math.round(info.up * 100)}% on your 2-week average` : 'starting target (no recent weeks to average yet)'}</div></div></div>`; })()}
+      <div class="bs-tiers" title="${locked ? 'Locked once you have studied an hour this week' : 'Pick this week\'s difficulty'}">${tiers}</div>
+      ${locked ? '' : '<div class="note" style="margin:-4px 0 10px">Pick your difficulty. It locks once you study an hour this week.</div>'}
+      <div class="bs-hp" title="Boss health"><i style="width:${hp}%"></i><u style="left:${Math.max(0, Math.min(100, 100 - paceFrac * 100))}%" title="Where you should be today"></u><span>${b.win ? 'Defeated' : Math.round(hp) + '% health left'}</span></div>
+      ${b.win ? '' : `<div class="note bs-pace">${ahead >= 0 ? `Ahead of pace by <b>${short(Math.round(ahead))}</b>` : `Behind pace by <b>${short(Math.round(-ahead))}</b>`} · the line shows where you should be today</div>`}
+      ${row(b.hOk, `Study <b>${short(b.hrs)}</b> of <b>${short(info.target)}</b>`)}
       ${row(b.dOk, `Study 1h+ on <b>${Math.min(b.days, BOSS_DAYS)}</b> of ${BOSS_DAYS} days`)}
-      ${c.subs.length ? `<div class="bs-row ${b.sOk ? 'ok' : ''}"><span>${b.sOk ? '✓' : '○'}</span><div>Every subject at least <b>${short(b.need)}</b><div class="gl-chips" style="margin-top:6px">${c.subs.map((x) => { const got = b.ss.get(x.id), ok = got >= b.need; return `<span class="${ok ? 'ok' : 'no'}">${ok ? '✓' : '✗'} ${esc(x.name)}${ok ? '' : ' · ' + short(b.need - got) + ' left'}</span>`; }).join('')}</div></div></div>` : ''}
-      ${status}
-      ${hadLast ? `<div class="note bs-last">Last week: ${lb.win ? 'defeated ✓' : `not beaten (${short(lb.hrs)} of ${short(lb.target)}${!lb.dOk ? ', too few study days' : ''}${!lb.sOk ? ', a subject was short' : ''})`}</div>` : ''}
+      ${c.subs.length ? `<div class="bs-row ${b.sOk ? 'ok' : ''}"><span>${b.sOk ? '✓' : '○'}</span><div>Every subject at least <b>${short(info.need)}</b><div class="gl-chips" style="margin-top:6px">${c.subs.map((x) => { const got = b.ss.get(x.id), ok = got >= info.need; return `<span class="${ok ? 'ok' : 'no'}">${ok ? '✓' : '✗'} ${esc(x.name)}${ok ? '' : ' · ' + short(info.need - got) + ' left'}</span>`; }).join('')}</div></div></div>` : ''}
+      ${b.win ? `<div class="bs-win">Defeated! +${info.reward} points${info.level < BOSS_LVMAX ? ' · level up next week' : ''}</div>${lootLine}` : `<div class="note">${left} ${left === 1 ? 'day' : 'days'} left${!b.hOk ? ` · about <b>${short(Math.round(perDay))}</b> a day to finish the hours` : ''}</div>`}
+      ${li && c.weeks[lastWs] && addDays(lastWs, 6) >= c.first ? `<div class="note bs-last">Last week: ${li.win ? 'defeated ✓' : `not beaten (${short(bossAt(c, li, addDays(lastWs, 6)).hrs)} of ${short(li.target)}) · level ${info.level}`}</div>` : ''}
     </div>`;
+  }
+  function bossUse(ws) {
+    const c = bossCtx(), t = bossTray(c).find((x) => x.ws === ws); if (!t) return;
+    const today = todayStr();
+    const finish = (extra) => {
+      const rec = touch({ id: uid(), rewardId: '', name: `${t.name} (boss loot)`, cost: 0, date: today, special: t.kind, lootWs: ws, ...(extra || {}) });
+      data.redemptions.push(rec); persist(true); render();
+      toast(`${t.name} used`, () => { rec.deleted = true; touch(rec); persist(true); render(); });
+    };
+    if (t.kind === 'rest') { if (isRest(today)) { toast('Today is already a rest day'); return; } finish(); }
+    else if (t.kind === 'disc') { if (discToken(today)) { toast('You already have a goal discount ready today'); return; } finish(); }
+    else if (t.kind === 'waiver') { if (waiverToken()) { toast('You already have a loan fee waiver ready'); return; } finish(); }
+    else if (t.kind === 'shield') {
+      const pts = computePoints(), y = addDays(today, -1);
+      if (yesterdayShieldable(y) && !(shielded(today) || isRest(today) || pts.studyToday > 0)) {
+        choiceModal('Which day should the shield protect?', `<p class="note" style="margin-bottom:14px">You did not study yesterday (${fmtShort(y)}). Protect that day, or today?</p>`, [
+          { label: 'Cancel' }, { label: 'Today', fn: () => finish({ for: today }) }, { label: `Yesterday (${fmtShort(y)})`, cls: 'primary', fn: () => finish({ for: y }) }]);
+      } else finish({ for: yesterdayShieldable(y) && (shielded(today) || isRest(today) || pts.studyToday > 0) ? y : today });
+    }
   }
   // a study session counts toward the weekly "every subject" goal through its topic's subject (study only)
   function weeklySubjectIds(s, tmap) {
@@ -3780,7 +3942,7 @@
           if (mn < mx && [...tot.entries()].some(([id, x]) => x === mn && today2.get(id) >= v.weakMin * 60)) add('Weak subject', v.weak, 'earn');
         }
         const ws = weekStart(d);
-        if (v.boss > 0) { const bw = bossAt(bc, ws, d); if (bw.win && !(d > ws && bossAt(bc, ws, addDays(d, -1)).win)) add('Weekly boss defeated', v.boss, 'earn'); }
+        if (v.boss > 0) { const bi = bossInfo(bc, ws); if (bi) { const bw = bossAt(bc, bi, d); if (bw.win && !(d > ws && bossAt(bc, bi, addDays(d, -1)).win)) { add(bi.rematch ? 'Weekly boss defeated (rematch x1.5)' : 'Weekly boss defeated', bi.reward, 'earn'); if (bi.loot.kind === 'pts') add('Boss loot: bonus points', bi.loot.amount, 'earn'); } } }
         if (finished && parseYmd(d).getDay() === 0 && ws >= start) {
           if (v.perfectWeek > 0 && goal > 0) {
             let met = 0, ok = true; for (let x = ws; x <= d; x = addDays(x, 1)) { if (sOf(x) >= goalSecOn(x)) met++; else if (!isRest(x)) ok = false; }
@@ -4232,6 +4394,8 @@
     const price = (x) => (x.st.free ? 0 : x.st.price);
     list.sort((a, b) => sh.sort === 'high' ? price(b) - price(a) : sh.sort === 'low' ? price(a) - price(b) : ((b.st.ok ? 1 : 0) - (a.st.ok ? 1 : 0)) || price(a) - price(b));
     const nReady = all.filter((x) => x.st.ok).length;
+    const tray = bossTray(bossCtx());
+    const trayHtml = tray.length ? `<div class="card shop-loot"><h2>⚔️ Boss loot <small>from the bosses you beat</small></h2>${tray.map((t) => `<div class="sh-row"><span class="sh-ic" style="background:${rwTint(t.icon)}">${t.icon}</span><span class="sh-nm">${esc(t.name)} <span class="bs-rar ${t.rarity}">${t.rarity}</span></span><span class="bs-mini" title="${esc(t.look.name)}" style="background:${bossArt(t.look.idx, t.level).bg}">${bossArt(t.look.idx, t.level).svg}</span><span class="note bs-from">${esc(t.look.name)}</span><button class="btn sm primary" data-action="loot-use" data-ws="${t.ws}">Use now</button></div>`).join('')}</div>` : '';
     const tokenNotes = (() => { const n = []; const rdb = restBought(today); if (rdb) n.push(`Rest day: every reward under ${rdb.cost} points is free today (once each)`);
       redLive().filter((r) => r.special === 'shield' && (r.for || r.date) >= today).forEach((r) => n.push(`Streak shield active for ${(r.for || r.date) === today ? 'today' : fmtShort(r.for || r.date)}`));
       if (discToken(today)) n.push(`Goal discount ready: ${v.discPct}% off your next goal-gated reward today`);
@@ -4260,6 +4424,7 @@
       <div class="page-head"><div><h1>Shop</h1><p class="sub">Spend your points on things you enjoy</p></div>
         <div class="shop-bal"><div><span class="lbl">Your points</span><b>${pts.A.toLocaleString('en-IN')}</b></div>${nReady ? `<span class="shop-n">${nReady} ready</span>` : ''}</div></div>
       ${tokenNotes}
+      ${trayHtml}
       <div class="shop-bar"><div class="shop-chips">${cats.map(([k, l]) => `<button class="shop-pill ${sh.cat === k ? 'on' : ''}" data-action="shop-cat" data-v="${k}">${l}</button>`).join('')}</div>
         <select data-change="shop-sort" aria-label="Sort" style="width:auto"><option value="ready" ${sh.sort === 'ready' ? 'selected' : ''}>Ready first</option><option value="low" ${sh.sort === 'low' ? 'selected' : ''}>Price: low to high</option><option value="high" ${sh.sort === 'high' ? 'selected' : ''}>Price: high to low</option></select>
         <button class="btn primary" data-action="rw-add">+ New reward</button></div>
@@ -4894,6 +5059,8 @@
       if (t) softDelete(t, `Deleted template "${t.name}"`);
     },
     // --- rewards
+    'boss-tier': (el) => { const c = bossCtx(), info = bossInfo(c, weekStart(c.td)); if (!info || bossAt(c, info, c.td).hrs >= 3600) return; const st = data.settings; st.boss = st.boss || { tiers: {} }; st.boss.tiers = st.boss.tiers || {}; st.boss.tiers[info.ws] = el.dataset.t; touch(st); persist(true); render(); },
+    'loot-use': (el) => bossUse(el.dataset.ws),
     'shop-open': () => { ui.page = 'shop'; render(); $('#main').scrollTop = 0; },
     'shop-back': () => { ui.page = 'rewards'; render(); $('#main').scrollTop = 0; },
     'shop-cat': (el) => { ui.shop.cat = el.dataset.v; render(); },
@@ -5482,6 +5649,6 @@
     bkInit();
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
     // expose a small hook for automated tests
-    window.__st = { famOf, startTimer, rndText, roundNow, APP_VERSION, get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
+    window.__st = { famOf, bossRoster: BOSS_ROSTER, bossArt, bossPick, bossRoll, bossCtx, bossInfo, startTimer, rndText, roundNow, APP_VERSION, get data() { return data; }, get hist() { return hist; }, persist, ui, render, computePoints, rewardState, rewardPrice, levelOf, subjectGroups, actualRaw, donutSlices, weekReview, parseQuickEntry, streak, dayStats, isRest, ting, weekStats, mergeData, todayStr, resolvePlan, blockActual, blockTimes, blockStatus, parseQuickLines, activePlanDate, ttDate, anchorMs };
   })();
 })();
