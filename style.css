@@ -1162,3 +1162,14 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
 .bs-tc.t-b { background: #fee2e2; color: #b91c1c; }
 .shop-btn:active { transform: translateY(calc(-50% + 1px)); }
 @media (max-width: 760px) { .shop-btn:active { transform: translateY(1px); } }
+
+/* v79: journal editor always left-aligned; placeholder pinned to the top-left of the box */
+.rt-ed { text-align: left; }
+.rt-ed.empty::before { top: 12px; left: 14px; right: 14px; text-align: left; }
+
+/* v80: paused timer card is red and loud */
+.mini.paused { background: #fff1f2; border-color: #fda4af; box-shadow: 0 0 0 3px rgba(225,29,72,.10); }
+.mini.paused .m-top { color: #e11d48; font-size: 13px; font-weight: 800; letter-spacing: .1em; }
+.mini.paused .pulse { width: 10px; height: 10px; background: #e11d48; animation: pulse 1s infinite; }
+.mini.paused .m-clock { color: #be123c; }
+@media (max-width: 760px) { .mini.on-today { display: none; } }

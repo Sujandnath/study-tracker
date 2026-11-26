@@ -753,7 +753,7 @@
       return;
     }
 
-    mini.hidden = ui.page === 'today';
+    mini.hidden = false; mini.classList.toggle('paused', !t.startedAt); mini.classList.toggle('on-today', ui.page === 'today');
     mini.innerHTML = `<div class="m-top"><span class="pulse ${t.startedAt ? '' : 'paused'}"></span>${t.startedAt ? 'Running' : 'Paused' + (paused ? ' · ' + pmm(ps) : '')}</div>
       <div class="m-clock">${hms(shown)}</div><div class="m-topic">${esc(t.topic || defaultLabel(t.type))}</div>`;
 
@@ -2358,8 +2358,10 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 78, APP_DATE = '26 Nov 2026';
+  const APP_VERSION = 80, APP_DATE = '26 Nov 2026';
   const CHANGELOG = [
+    [80, '26 Nov', 'The running / paused timer card in the side bar now stays visible on every page, including Today (on a phone it still hides on Today, where the big timer is). When the timer is paused the card turns red with a bold, pulsing PAUSED so you cannot miss it.'],
+    [79, '26 Nov', 'Fix: the journal box on an empty day showed its hint and cursor centred or pushed to the right. It is now left-aligned like normal text.'],
     [78, '26 Nov', 'Fix: the Shop button sometimes ignored a click (it jumped when pressed). Weekly boss: once your difficulty locks in (after 1h of study that week) the Normal / Hard / Brutal choices disappear and the difficulty shows as a tag beside the boss name.'],
     [77, '26 Nov', 'Weekly bosses now have faces: 25 hand-drawn, scary-cute bosses (The Lazy Slug, The Doomscroller, The Deadline Dragon...) with a one-line taunt each. A new boss each week (a rematch keeps the same one), spikes at level 4, a crown at level 7 and a blazing aura at level 9. A beaten boss shows bandaged and dizzy.'],
     [76, '26 Nov', 'Weekly boss upgrade: pick Normal, Hard or Brutal each week, boss levels (win to level up, lose to drop one; up to +40% on your 2-week average), loot drops on a win (bonus points, goal discount, loan fee waiver, streak shield or rest day, kept in the Shop), a rematch with x1.5 points after a loss, and a pace marker on the health bar. The boss card is no longer on the Today page.'],
