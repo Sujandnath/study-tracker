@@ -1173,3 +1173,7 @@ html:has(body.focus-lock), body.focus-lock, body.focus-lock #main { overflow: hi
 .mini.paused .pulse { width: 10px; height: 10px; background: #e11d48; animation: pulse 1s infinite; }
 .mini.paused .m-clock { color: #be123c; }
 @media (max-width: 760px) { .mini.on-today { display: none; } }
+
+/* v81: pause fee notes */
+.pause-cost { margin: 10px 0 10px; text-align: center; }
+.pp-s.fee { color: #e11d48; font-weight: 800; }

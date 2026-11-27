@@ -710,6 +710,24 @@
   }
 
   let lastLive = 0;
+  // the browser-tab icon turns red while a timer is paused, and goes back to the normal icon after
+  let favState = null, favOrig = null;
+  function setFav(paused) {
+    if (favState === paused) return; favState = paused;
+    try {
+      const old = document.querySelector('link[rel="icon"]'); if (!old) return;
+      if (favOrig === null) favOrig = old.getAttribute('href');
+      let href = favOrig;
+      if (paused) {
+        const c = document.createElement('canvas'); c.width = c.height = 64; const x = c.getContext('2d');
+        x.fillStyle = '#e11d48'; x.beginPath(); if (x.roundRect) x.roundRect(2, 2, 60, 60, 15); else x.rect(2, 2, 60, 60); x.fill();
+        x.fillStyle = '#fff'; x.fillRect(19, 16, 9, 32); x.fillRect(36, 16, 9, 32);
+        href = c.toDataURL('image/png');
+      }
+      const nu = document.createElement('link'); nu.rel = 'icon'; nu.type = paused ? 'image/png' : 'image/png'; nu.href = href;
+      old.replaceWith(nu);
+    } catch { /* ignore */ }
+  }
   function tick() {
     const t = data && data.timer;
     const mini = $('#mini');
@@ -720,14 +738,15 @@
       const busy = drag || $('#modal-root').innerHTML || typingNow();
       if (!busy) { render(); return; }
     }
-    if (!t) { mini.hidden = true; return; }
+    if (!t) { mini.hidden = true; setFav(false); return; }
     const paused = !t.startedAt && !!t.pausedAt, ps = paused ? Math.max(0, (nowMs - t.pausedAt) / 1000) : 0;
     if (paused) {
       const allowed = pauseAllowance(t, ps), used = (t.pauseSec || 0) + ps, frac = allowed ? used / allowed : 0;
       const pc = $('#pclock'); if (pc) pc.textContent = pmm(ps);
       const fg = $('#pfg'); if (fg) fg.style.strokeDashoffset = (339.3 * (1 - Math.min(1, allowed ? frac : Math.min(1, ps / 900)))).toFixed(1);
       const panel = $('#ppanel'); if (panel) panel.className = 'pause-panel ' + (!allowed ? 'ok' : frac >= 1 ? 'over' : frac >= 0.75 ? 'warn' : 'ok');
-      const pn = $('#pnote'); if (pn) pn.textContent = !allowed ? (ps < 60 ? 'under a minute is not logged' : 'being logged') : frac >= 1 ? 'over your pause budget' : `${short(Math.max(0, Math.round(used)))} of ${short(Math.round(allowed))} budget`;
+      const pfee = ptv().pauseFee, pfn = Math.floor(ps / 60) * pfee;
+      const pn = $('#pnote'); if (pn && pfee > 0) { pn.textContent = ps < 60 ? `free for the first minute` : `−${pfn} pts so far`; pn.classList.toggle('fee', ps >= 60); } else if (pn) pn.textContent = !allowed ? (ps < 60 ? 'under a minute is not logged' : 'being logged') : frac >= 1 ? 'over your pause budget' : `${short(Math.max(0, Math.round(used)))} of ${short(Math.round(allowed))} budget`;
       const lp = longPauseMin();
       if (lp && !t.pauseAlerted && ps >= lp * 60) {
         t.pauseAlerted = true; t.overAlerted = true; persist(true);
@@ -754,7 +773,8 @@
     }
 
     mini.hidden = false; mini.classList.toggle('paused', !t.startedAt); mini.classList.toggle('on-today', ui.page === 'today');
-    mini.innerHTML = `<div class="m-top"><span class="pulse ${t.startedAt ? '' : 'paused'}"></span>${t.startedAt ? 'Running' : 'Paused' + (paused ? ' · ' + pmm(ps) : '')}</div>
+    const miniFee = paused && ptv().pauseFee > 0 && ps >= 60 ? ` · −${Math.floor(ps / 60) * ptv().pauseFee}` : '';
+    mini.innerHTML = `<div class="m-top"><span class="pulse ${t.startedAt ? '' : 'paused'}"></span>${t.startedAt ? 'Running' : 'Paused' + (paused ? ' · ' + pmm(ps) + miniFee : '')}</div>
       <div class="m-clock">${hms(shown)}</div><div class="m-topic">${esc(t.topic || defaultLabel(t.type))}</div>`;
 
     const clock = $('#clock');
@@ -768,7 +788,8 @@
     }
     { const rb = $('#rnd'); if (rb) rb.textContent = rndText(); }
     roundWatch(t, el);
-    document.title = paused ? `⏸ ${pmm(ps)} paused · ${t.topic || defaultLabel(t.type)}` : `${hms(shown)} · ${t.topic || defaultLabel(t.type)}`;
+    setFav(!t.startedAt);
+    document.title = paused ? `🔴 ${pmm(ps)} PAUSED · ${t.topic || defaultLabel(t.type)}` : `${hms(shown)} · ${t.topic || defaultLabel(t.type)}`;
   }
 
   // ---------- derived data ----------
@@ -1632,6 +1653,7 @@
             <button class="btn big primary" data-action="stop">${kindOf(t.type) === 'sleep' ? 'Woke up &amp; save' : 'Stop &amp; save'}</button>
             <button class="btn big danger" data-action="discard">Discard</button>
           </div>
+          ${isStudyTimer(t) && t.startedAt && ptv().pauseFee > 0 ? `<div class="note pause-cost">Pausing costs ${ptv().pauseFee} points per minute</div>` : ''}
           <input type="text" data-bind="run-comment" placeholder="Add a comment (optional)" value="${esc(t.comment)}">
           <div class="timer-extra">
             <button class="linkbtn" data-action="switch-topic">⇄ Switch topic</button>
@@ -2358,8 +2380,10 @@
   //  VERSION + RULES PAGE
   //  Keep APP_VERSION in step with the cache name in sw.js, add a line to CHANGELOG, and update rulesBody() whenever a rule changes.
   // =====================================================================
-  const APP_VERSION = 80, APP_DATE = '26 Nov 2026';
+  const APP_VERSION = 82, APP_DATE = '26 Nov 2026';
   const CHANGELOG = [
+    [82, '27 Nov', 'Early bedtime bonus: +15 when the sleep you log starts before 12:30 am (and lasts 5+ hours). No penalty for later. The points, the cutoff time and the minimum sleep are in Points settings.'],
+    [81, '27 Nov', 'Pausing a study timer now costs 5 points per full minute (under a minute is free), taken from that day\'s earnings and never below 0; change it under Points settings. The browser tab icon turns red while paused. "Take the break now" opens the same Round dialog (keep studying, last round, emergency, active break). The Focus chain card now always shows the round you just finished, so the rows add up to what you earned.'],
     [80, '26 Nov', 'The running / paused timer card in the side bar now stays visible on every page, including Today (on a phone it still hides on Today, where the big timer is). When the timer is paused the card turns red with a bold, pulsing PAUSED so you cannot miss it.'],
     [79, '26 Nov', 'Fix: the journal box on an empty day showed its hint and cursor centred or pushed to the right. It is now left-aligned like normal text.'],
     [78, '26 Nov', 'Fix: the Shop button sometimes ignored a click (it jumped when pressed). Weekly boss: once your difficulty locks in (after 1h of study that week) the Normal / Hard / Brutal choices disappear and the difficulty shows as a tag beside the boss name.'],
@@ -2456,8 +2480,12 @@
         `<b>Active break:</b> when a focus round ends you can start a 10 minute <b>active break</b> (stretching, a walk, exercises) instead of a normal break. It counts as your break, earns <b>+${v.activeBrk}</b> when it lasts 8+ minutes (up to ${v.activeMax} a day), and its minutes count toward the Move goal.`])}
       ${sec('Routine logging', [
         `Logging routine activities (meals, shower and any category with a reward set) earns small points, up to <b>${v.routineCap} a day</b>. Set each category's reward and minimum time in Topics & Presets.`])}
+      ${sec('Sleep', [
+        `Logging sleep earns <b>+${v.sleep}</b>.`,
+        ...(v.bedBonus > 0 ? [`<b>Early bedtime:</b> a sleep entry that starts between 6 pm and <b>${clock12(v.bedBy)}</b> and lasts at least <b>${v.bedMinH} hours</b> earns another <b>+${v.bedBonus}</b>, once a day. A later bedtime earns nothing extra, and there is no penalty for it.`] : [])])}
       ${sec('Pauses', [
-        `Your pause budget is <b>${st.pauseBudget || 0} minutes per hour</b> of session (0 means off), and you get a reminder when a single pause lasts <b>${st.longPause || 0} minutes</b>.`])}
+        `Your pause budget is <b>${st.pauseBudget || 0} minutes per hour</b> of session (0 means off), and you get a reminder when a single pause lasts <b>${st.longPause || 0} minutes</b>.`,
+        ...(v.pauseFee > 0 ? [`<b>Pause fee:</b> pausing a study timer costs <b>${v.pauseFee} points for every full minute</b> you stay paused. Under a minute is free. The fee comes out of what you have earned that day and never takes the day below 0, not on a rest day. Emergency breaks and normal breaks are free, and discarding a timer does not charge a fee.`] : [])])}
       ${sec('Rewards and prices', [
         `Points buy rewards. You can borrow up to <b>${v.loanMax.toLocaleString('en-IN')}</b> points: a <b>${v.loanFee}%</b> fee is added once and the debt never grows after that.`,
         `<b>Levels</b> come from your lifetime points and never go down: ${LEVELS.map(([n, p]) => `${n} (${p.toLocaleString('en-IN')})`).join(', ')}.`,
@@ -3557,13 +3585,17 @@
   // =====================================================================
   // a study block pays in proportion to its planned length: blockM is the price of 1 hour, capped at 3 hours (older days keep the flat price)
   const blockPtsFor = (d, b, v, cfg) => d >= (cfg.blockFrom || '0000-00-00') ? Math.min(v.blockM * 3, Math.max(1, Math.round(v.blockM * blockDur(b) / 60))) : v.blockM;
-  const PT_DEFAULTS = { study30: 10, workout30: 10, workoutMax: 3, moveMin: 20, move: 40, missMove: 10, activeBrk: 5, activeMax: 3, fuel: 5, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, roundBase: 10, roundStep: 5, roundCap: 40, routineCap: 10, subjDay: 30, subjMin: 20, missSubject: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, weak: 15, weakMin: 30, noMiss: 25, boss: 300, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
+  // early bedtime: a sleep entry that starts in the evening (from 6 pm) up to the cutoff after midnight, and lasts long enough
+  const clock12 = (m) => { m = ((m % 1440) + 1440) % 1440; const h = Math.floor(m / 60), mm = m % 60; return `${h % 12 || 12}${mm ? ':' + String(mm).padStart(2, '0') : ''} ${h < 12 ? 'am' : 'pm'}`; };
+  const bedEarly = (s, v) => { if (kindOf(s.type) !== 'sleep' || s.seconds < v.bedMinH * 3600) return false; const t = new Date(s.start), tod = t.getHours() * 60 + t.getMinutes(); return tod >= 1080 || tod < v.bedBy; };
+  const PAUSE_FEE_FROM = Date.UTC(2026, 10, 26, 23, 0); // 04:30 IST on 27 Nov 2026: pauses before the fee existed stay free
+  const PT_DEFAULTS = { bedBonus: 15, bedBy: 30, bedMinH: 5, pauseFee: 5, study30: 10, workout30: 10, workoutMax: 3, moveMin: 20, move: 40, missMove: 10, activeBrk: 5, activeMax: 3, fuel: 5, goal: 50, stretchMin: 540, stretch: 100, plan: 15, loanFee: 25, loanMax: 1500, loanShare: 50, planWindow: 60, earlyFloor: 50, blockH: 30, blockM: 20, blockL: 10, roundBase: 10, roundStep: 5, roundCap: 40, routineCap: 10, subjDay: 30, subjMin: 20, missSubject: 5, checkin: 5, journal: 5, sleep: 5, streak3: 20, streak7: 50, streak30: 150, allSubjects: 50, missGoal: 20, missBlock: 10, cap: 30, meditate30: 10, meditateMax: 2, earlyStart: 15, earlyWin: 60, wakeSteady: 10, wakeWin: 30, revise: 10, weak: 15, weakMin: 30, noMiss: 25, boss: 300, weekGoalH: 20, perfectWeek: 100, improve: 30, comeback: 20, comebackMin: 60, streak14: 30, mile50: 50, mile100: 100, mile250: 250, weekReview: 15, mock: 30, mockBeat: 15, discPct: 30 };
   const PT_LABELS = [
     ['study30', 'Study, per 30 minutes (paid per minute)'], ['workout30', 'Workout, per 30 minutes (paid per minute)'], ['workoutMax', 'Workout: most 30-minute blocks counted per day'], ['moveMin', 'Move goal: minutes of workout in a day'], ['move', 'Move goal reached (workout)'], ['missMove', 'Move goal missed, no workout: penalty (not on rest days)'], ['activeBrk', 'Active break (8+ minutes of workout in a focus-round break): reward'], ['activeMax', 'Active break (workout): most counted per day'], ['fuel', 'Fuel bonus: percent extra on study-minute points on workout days (Move goal reached)'], ['meditate30', 'Meditation, per 30 minutes (paid per minute)'], ['meditateMax', 'Meditation: most 30-minute blocks counted per day'], ['goal', 'Daily goal reached'], ['stretchMin', 'Stretch goal (minutes of study)'], ['stretch', 'Stretch goal reached (bonus on top)'], ['plan', 'Planned the day early'], ['planWindow', 'Plan within this many minutes of waking'], ['earlyFloor', 'Finish a block early: minimum % of the planned time'], ['loanFee', 'Loan fee (%, charged up front)'], ['loanMax', 'Loan: maximum amount'], ['loanShare', 'Loan auto-repay share of daily earnings (%)'],
     ['blockM', 'Study block done: reward per hour of block length (30 min pays half, max 3 hours)'], ['routineCap', 'Routine logging (meals, shower…): maximum points per day'], ['roundBase', 'Focus round 2 reward (1h of study, then a break and back in 15 min)'], ['roundStep', 'Focus rounds: extra for each round after'], ['roundCap', 'Focus rounds: maximum reward'], ['subjDay', 'Every subject studied today: reward'], ['subjMin', 'Minutes of study per subject to count today'], ['missSubject', 'Subject skipped today: penalty each'],
-    ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'],
+    ['checkin', 'Evening check-in'], ['journal', 'Journal entry'], ['sleep', 'Sleep logged'], ['bedBonus', 'Early bedtime bonus (a sleep entry that starts before the cutoff; 0 = off)'], ['bedBy', 'Early bedtime cutoff, in minutes after midnight (30 = 12:30 am)'], ['bedMinH', 'Early bedtime: least hours of sleep that count'],
     ['streak3', '3-day streak'], ['streak7', '7-day streak'], ['streak30', '30-day streak'], ['allSubjects', 'Every subject studied in a week'],
-    ['missGoal', 'Missed goal: maximum penalty'], ['missBlock', 'Missed study block'], ['cap', 'Daily penalty cap'],
+    ['missGoal', 'Missed goal: maximum penalty'], ['missBlock', 'Missed study block'], ['cap', 'Daily penalty cap'], ['pauseFee', 'Pause fee: points per paused minute (study timer, from the 1st full minute; 0 = off)'],
     ['earlyStart', 'Early start: first study within the window after waking'], ['earlyWin', 'Early start window (minutes after waking)'],
     ['wakeSteady', 'Steady wake time (within the window of your usual week)'], ['wakeWin', 'Steady wake window (minutes)'],
     ['revise', 'Revision: study a topic last covered 3+ days ago (10+ min)'], 
@@ -3844,6 +3876,7 @@
     let first = start;
     studyDays.forEach((d) => { if (d < first) first = d; });
     const bc = bossCtx();
+    const pauseMin = {}; live(data.pauses).forEach((p) => { if (p.start >= PAUSE_FEE_FROM) pauseMin[p.date] = (pauseMin[p.date] || 0) + Math.floor(p.seconds / 60); });
     const studyBy = {}, wakeBy = {}, topicDates = new Map(), mocks = [];
     const mockScore = (t) => { const m = /(\d+(?:\.\d+)?)\s*(?:%|\/\s*(\d+(?:\.\d+)?))/.exec(t || ''); if (!m) return null; const x = parseFloat(m[1]); return m[2] ? x / parseFloat(m[2]) * 100 : x; };
     const isMock = (s) => kindOf(s.type) === 'study' && /\b(mock|test)\b/i.test(s.topic || '');
@@ -3920,6 +3953,7 @@
       if (ci && (ci.mood || ci.focus)) add('Evening check-in', v.checkin, 'earn');
       if (((data.journal[d] && data.journal[d].text) || '').trim()) add('Journal entry', v.journal, 'earn');
       if (list.some((s) => kindOf(s.type) === 'sleep')) add('Sleep logged', v.sleep, 'earn');
+      if (v.bedBonus > 0 && list.some((s) => bedEarly(s, v))) add(`Early bedtime (before ${clock12(v.bedBy)})`, v.bedBonus, 'earn');
       if (studied && (streakLen === 3 || streakLen === 7 || streakLen === 14 || streakLen === 30)) add(`${streakLen}-day streak`, v['streak' + streakLen], 'earn');
       { // ---- extra earners
         const sOf = (x) => (x === d ? study : (studyBy[x] || 0));
@@ -3981,6 +4015,10 @@
         if (isToday && tm) weeklySubjectIds(tm, tmap).forEach((id) => { if (ss.has(id)) ss.set(id, ss.get(id) + tmElapsed); });
         subMiss = subs.filter((x) => ss.get(x.id) < subjNeed(v));
         if (!subMiss.length && v.subjDay > 0) add('Every subject studied today', v.subjDay, 'earn');
+      }
+      if (v.pauseFee > 0 && !isRest(d)) { // pausing a study timer costs points per full minute, taken from what the day has earned (never below 0)
+        const n = (pauseMin[d] || 0) + (isToday && tm && tm.pausedAt && !tm.startedAt && tm.pausedAt >= PAUSE_FEE_FROM ? Math.floor((now - tm.pausedAt) / 60000) : 0);
+        if (n > 0) { const raw = n * v.pauseFee, fee = Math.min(raw, Math.max(0, items.reduce((a, i) => a + i.pts, 0))); add(`Paused ${n} min${fee < raw ? ' (capped at what you earned today)' : ''}`, -fee, 'pen'); }
       }
       const earned = items.reduce((n, i) => n + i.pts, 0);
       // penalties (only for finished days; rest days are protected). Today shows what would apply if it ended now.
@@ -4158,7 +4196,7 @@
   const itemKey = (l) => /^Study \d|^Study$/.test(l) ? 'Study time' : /^Workout/.test(l) ? 'Workout' : /^Meditation/.test(l) ? 'Meditation' : /^Daily goal/.test(l) ? 'Daily goal' : /^Stretch/.test(l) ? 'Stretch goal'
     : /study blocks? done/.test(l) ? 'Study blocks done' : /focused/.test(l) ? 'Focused sessions' : /^Evening check-in/.test(l) ? 'Evening check-in' : /^Journal/.test(l) ? 'Journal' : /^Sleep/.test(l) ? 'Sleep logged'
     : /-day streak/.test(l) ? 'Streak bonuses' : /^Every subject/.test(l) ? 'All subjects studied' : /^Planned the day/.test(l) ? 'Planned early' : /^Missed daily goal/.test(l) ? 'Missed daily goal'
-    : /^Routine:/.test(l) ? 'Routine logging' : /^Focus round/.test(l) ? 'Focus rounds' : /missed blocks?/.test(l) ? 'Missed study blocks' : /penalty cap/.test(l) ? 'Daily penalty cap' : l;
+    : /^Routine:/.test(l) ? 'Routine logging' : /^Focus round/.test(l) ? 'Focus rounds' : /missed blocks?/.test(l) ? 'Missed study blocks' : /penalty cap/.test(l) ? 'Daily penalty cap' : /^Paused \d/.test(l) ? 'Pausing' : l;
   function rwRange(today) {
     const r = ui.rw, m = r.mode, anchor = r.date && r.date <= today ? r.date : today;
     if (m === 'week') { const s = weekStart(anchor); return { from: s, to: addDays(s, 6) < today ? addDays(s, 6) : today }; }
@@ -4295,7 +4333,8 @@
     const ci = data.checkins[today];
     [['checkin', 'Evening check-in', v.checkin, !!(ci && (ci.mood || ci.focus)), 'Rate your mood and focus on the Today page'],
      ['journal', 'Journal entry', v.journal, !!(((data.journal[today] && data.journal[today].text) || '').trim()), 'Write a line in your journal'],
-     ['sleep', 'Sleep logged', v.sleep, sess.some((s) => kindOf(s.type) === 'sleep'), 'Log last night’s sleep']].forEach(([id, name, p, ok, note]) => { if (p > 0) push({ id, name, pts: p, state: ok ? 'done' : 'open', note, dn: ok ? 'Done for today' : '' }); });
+     ['sleep', 'Sleep logged', v.sleep, sess.some((s) => kindOf(s.type) === 'sleep'), 'Log last night’s sleep'],
+     ['bedtime', `Bed before ${clock12(v.bedBy)}`, v.bedBonus, sess.some((s) => bedEarly(s, v)), `Log sleep that starts before ${clock12(v.bedBy)} (at least ${v.bedMinH}h)`]].forEach(([id, name, p, ok, note]) => { if (p > 0) push({ id, name, pts: p, state: ok ? 'done' : 'open', note, dn: ok ? 'Done for today' : '' }); });
     // 8. streak milestone
     { const cur = streak(), next = [3, 7, 30].find((m) => m > cur);
       if (next && v['streak' + next] > 0) push({ id: 'streak', name: `${next}-day streak`, pts: v['streak' + next], state: 'open', pct: cur / next * 100, note: `${cur} of ${next} days${cur + 1 === next ? ' · study today to get it' : ` · ${next - cur} more day${next - cur === 1 ? '' : 's'}`}`, dots: next <= 10 ? { on: cur, total: next } : null }); }
@@ -4585,7 +4624,7 @@
           if (sk && emN < ROUND_EM_N && ems.some(inGap)) emN++; // pressed Emergency, then skipped: that emergency break is spent
           if (acc >= ROUND_SEC) {
             if (gap <= ROUND_RET || rt || cb) { rowRound(sk ? 'skip' : cb ? 'restored' : rt ? 'routine' : 'break'); k++; }
-            else { log.push({ t: 'end', k, why: 'late', last, at: x.st, gapMin: Math.round(gap / 60), restorable: gap <= CHAIN_WIN }); k = 1; emN = 0; }
+            else { rowRound('late'); log.push({ t: 'end', k, why: 'late', last, at: x.st, gapMin: Math.round(gap / 60), restorable: gap <= CHAIN_WIN }); k = 1; emN = 0; }
           }
           else if (!sk && gap <= ROUND_RET) { /* a short break in the middle of a round: the minutes so far are kept */ }
           else { if (k >= 2) log.push({ t: 'end', k, why: 'mid', last, at: x.st, gapMin: Math.round(gap / 60), restorable: false }); acc = 0; parts = []; k = 1; emN = 0; } // a long break in the middle of a round also ends the chain
@@ -4601,19 +4640,19 @@
       else if (x.last && acc >= ROUND_SEC / 2) { const p = paid ? roundPts(k) : Math.round(roundPts(k) * Math.min(1, acc / ROUND_SEC)); if (p && !paid) events.push({ k, pts: p, last: true }); closed = { k, pts: p, sec: acc }; rowRound('last'); k = 1; acc = 0; emN = 0; parts = []; paid = false; }
     });
     // not studying right now: a long enough time away ends the round (and resets the chain if the 15 minutes ran out)
-    let late = null;
+    let late = null, tailLogged = false;
     if (last !== null && !(tmLive && kindOf(tmLive.type) === 'study')) {
       const away = (Date.now() - last) / 1000;
       if (away >= ROUND_BRK && acc >= ROUND_EARLY && acc < ROUND_SEC) { acc = ROUND_SEC; if (!paid) { paid = true; doneN++; const p = roundPts(k); if (p) events.push({ k, pts: p }); } } // same rule while you are away
       const rtNow = away <= ROUND_EM_MAX && rts.some((t0) => t0 >= last - 120000), cbNow = acc >= ROUND_SEC && away <= CHAIN_WIN && cbAt(last), emRun = emNowTest(ems, last);
       const canEm = emN < ROUND_EM_N && away <= emMax(emN);
       if (acc >= ROUND_SEC && away > ROUND_RET && !emRun && !rtNow && !cbNow) {
-        log.push({ t: 'end', k, why: 'late', last, at: Date.now(), gapMin: Math.round(away / 60), restorable: true, now: true });
+        rowRound('late'); tailLogged = true; log.push({ t: 'end', k, why: 'late', last, at: Date.now(), gapMin: Math.round(away / 60), restorable: true, now: true });
         if (away <= LATE_ASK_WIN) late = { k, acc, last, canEm, canBuy: true, gapMin: Math.round(away / 60) };
       }
       if (emN < ROUND_EM_N && away <= emGap(emN) && emRun) emN++; // an emergency break is running or has just finished: nothing resets yet
       else if ((rtNow || cbNow) && acc >= ROUND_SEC) { /* a logged shower or meal, or a bought-back chain: the chain is not reset yet */ }
-      else if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) { k = 1; emN = 0; } if (away > ROUND_RET) { if (acc < ROUND_SEC) { if (k >= 2) log.push({ t: 'end', k, why: 'mid', last, at: Date.now(), gapMin: Math.round(away / 60), restorable: false, now: true }); k = 1; emN = 0; } acc = 0; } }
+      else if (away >= ROUND_BRK) { if (acc >= ROUND_SEC && away > ROUND_RET) { if (!tailLogged) rowRound('late'); k = 1; emN = 0; } if (away > ROUND_RET) { if (acc < ROUND_SEC) { if (k >= 2) log.push({ t: 'end', k, why: 'mid', last, at: Date.now(), gapMin: Math.round(away / 60), restorable: false, now: true }); k = 1; emN = 0; } acc = 0; } }
     }
     return { k, acc, events, parts, log, maxK, doneN, paid: paid && acc >= ROUND_SEC, lastEn: last, late, done: acc >= ROUND_SEC, closed, emUsed: emN >= ROUND_EM_N, emN, emActive: !!(tmLive && tmLive.emergency) };
   }
@@ -4664,7 +4703,7 @@
   }
   function chainCardHtml(pts) {
     const r = roundNow(), t = data.timer, td = todayStr(), open = chainOpen(), st = chainStats();
-    const how = { break: 'break', emergency: 'emergency break', skip: 'break skipped', routine: 'shower / meal', restored: 'chain restored', last: 'last round' };
+    const how = { late: 'chain ended', break: 'break', emergency: 'emergency break', skip: 'break skipped', routine: 'shower / meal', restored: 'chain restored', last: 'last round' };
     const rows = r.log.map((e) => e.t === 'round'
       ? `<div class="d">Round ${e.k} · ${short(e.min)}${e.pts ? ` · +${e.pts}` : ''}<small>${hhmm(e.st)}–${hhmm(e.en)} · ${how[e.how] || 'break'}</small></div>`
       : `<div class="x">Chain ended · ${e.why === 'mid' ? `away ${e.gapMin} min in the middle of Round ${e.k}` : `back ${e.gapMin} min late (limit 15)`}<small>${hhmm(e.last)} · Round ${e.k} lost${e.restorable ? ' · you can restore it' : ''}</small></div>`).join('');
@@ -4758,19 +4797,20 @@
     startTimer({ type: 'break', topic: active === true ? 'Active break' : 'Break', mode: 'countdown', minutes: 10, roundBreak: true, active: active === true });
     render();
   }
-  function roundDialog(t) {
+  function roundDialog(t, early) {
     const r = ui.round = ui.round || { snooze: 0, untilStop: null }, rs = roundNow(), nx = roundPts(rs.k);
     r.snooze = Date.now() + 600000;
-    if (data.settings.sound !== false) ting();
+    if (!early && data.settings.sound !== false) ting();
+    const go = (fn) => () => { if (early && data.timer && isStudyTimer(data.timer)) data.timer.earlyBrk = true; fn(); }; // 'break now' before the full hour: the minutes count as the round
     const btns = [];
-    if (t) btns.push({ label: 'Keep going: finish this block first', fn: () => { r.untilStop = t.id; } });
+    if (t) btns.push({ label: early ? 'Keep studying' : 'Keep going: finish this block first', fn: () => { r.untilStop = t.id; } });
     btns.push({ label: 'Ask again in 10 min', fn: () => { r.snooze = Date.now() + 600000; } });
     if (lastRoundOk()) btns.push({ label: 'This is my last round', fn: () => lastRoundModal(null) });
     if (emergencyOk()) btns.push({ label: emLabel(), fn: emergencyModal });
-    btns.push({ label: 'Active break (10 min, +' + ptv().activeBrk + ')', fn: () => takeRoundBreak(true) });
-    btns.push({ label: 'Start 10 min break', cls: 'primary', fn: takeRoundBreak });
-    choiceModal(`${rs.k === 1 ? '1 hour' : 'Round ' + rs.k} of study done`, `
-      <p style="line-height:1.55;margin-bottom:8px">You have studied <b>${short(rs.acc)}</b> this round. Take a <b>10 minute break</b>?</p>
+    btns.push({ label: 'Active break (10 min, +' + ptv().activeBrk + ')', fn: go(() => takeRoundBreak(true)) });
+    btns.push({ label: 'Start 10 min break', cls: 'primary', fn: go(() => takeRoundBreak(false)) });
+    choiceModal(early ? `Round ${rs.k}: take the break now?` : `${rs.k === 1 ? '1 hour' : 'Round ' + rs.k} of study done`, `
+      <p style="line-height:1.55;margin-bottom:8px">You have studied <b>${short(rs.acc)}</b> this round. ${early ? (rs.acc >= ROUND_EARLY ? 'Taking the break now <b>counts it as a full round</b>. ' : 'Taking the break now keeps your minutes if you are back within 15 minutes. ') : ''}Take a <b>10 minute break</b>?</p>
       <p class="note">${rs.paid ? `This round is already paid${roundPts(rs.k) ? ` (+${roundPts(rs.k)})` : ''}. ` : ''}Come back within 15 minutes of the break to keep your chain${roundPts(rs.k + 1) ? ` and earn <b>+${roundPts(rs.k + 1)}</b> for round ${rs.k + 1}` : ''}.</p>`, btns);
   }
   function nextStudyBlock() {
@@ -5283,8 +5323,7 @@
     },
     'break-now': () => {
       const t = data.timer, r = roundNow(); if (!t || !isStudyTimer(t) || r.done || r.acc < ROUND_EARLY_FROM) return;
-      const full = r.acc >= ROUND_EARLY; t.earlyBrk = true; stopTimer(true, { quiet: true }); takeRoundBreak(false);
-      toast(full ? `Round ${r.k} counted. Break started, be back within 15 minutes` : 'Break started. Your minutes are kept if you are back within 15 minutes');
+      roundDialog(t, true);
     },
     'need-longer': () => {
       const t = data.timer, r = roundNow(); if (!t || !t.roundBreak || r.emUsed || r.closed) { toast('Emergency break is not available'); return; }
